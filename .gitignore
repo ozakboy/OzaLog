@@ -255,6 +255,7 @@ site/.output/
 site/.data/
 site/.cache/
 site/dist/
+site/dist
 site/.env
 site/.env.*
 site/*.log
