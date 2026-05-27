@@ -4,16 +4,16 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
 
   // Nuxt site config (used by sitemap module to prepend absolute URL)
-  // 注意:url 只能放 domain,baseURL 在 app.baseURL 處理(GitHub Pages project site 規則)
+  // 已綁定自訂網域 ozalog.ozakboy.life,網站從根目錄 / 提供,故 baseURL 為 '/'
   site: {
-    url: 'https://ozakboy.github.io',
+    url: 'https://ozalog.ozakboy.life',
     name: 'OzaLog',
     description:
       'Lean .NET local file logging library with the simplest possible static API. HFT-grade async pipeline, zero NuGet dependencies on net8+. Designed for high-throughput multi-threaded scenarios like cryptocurrency tick streams.',
   },
 
   app: {
-    baseURL: '/OzaLog/',
+    baseURL: '/',
     head: {
       title: 'OzaLog — Lean .NET Local File Logger',
       htmlAttrs: { lang: 'zh-TW' },
@@ -48,8 +48,8 @@ export default defineNuxtConfig({
           content:
             'Simplest possible static API. HFT-grade async pipeline. Zero NuGet deps on net8+. Designed for crypto tick stream scenarios.',
         },
-        { property: 'og:url', content: 'https://ozakboy.github.io/OzaLog/' },
-        { property: 'og:image', content: 'https://ozakboy.github.io/OzaLog/logo.png' },
+        { property: 'og:url', content: 'https://ozalog.ozakboy.life/' },
+        { property: 'og:image', content: 'https://ozalog.ozakboy.life/logo.png' },
         { property: 'og:image:alt', content: 'OzaLog logo' },
         { property: 'og:locale', content: 'zh_TW' },
         { property: 'og:locale:alternate', content: 'en_US' },
@@ -62,12 +62,12 @@ export default defineNuxtConfig({
           content:
             'Simplest possible static API. HFT-grade async pipeline. Zero NuGet deps on net8+.',
         },
-        { name: 'twitter:image', content: 'https://ozakboy.github.io/OzaLog/logo.png' },
+        { name: 'twitter:image', content: 'https://ozalog.ozakboy.life/logo.png' },
       ],
       link: [
-        { rel: 'icon', type: 'image/png', href: '/OzaLog/logo.png' },
-        { rel: 'apple-touch-icon', href: '/OzaLog/logo.png' },
-        { rel: 'canonical', href: 'https://ozakboy.github.io/OzaLog/' },
+        { rel: 'icon', type: 'image/png', href: '/logo.png' },
+        { rel: 'apple-touch-icon', href: '/logo.png' },
+        { rel: 'canonical', href: 'https://ozalog.ozakboy.life/' },
       ],
     },
   },
@@ -77,7 +77,7 @@ export default defineNuxtConfig({
     '@nuxtjs/tailwindcss',
     '@nuxt/content',
     '@nuxtjs/sitemap',
-    // @nuxtjs/robots 不適用(Project Pages baseURL 與 robots.txt root 衝突),
+    // @nuxtjs/robots 不適用(baseURL 與 robots.txt root 衝突),
     // 改用 site/public/robots.txt 靜態檔
   ],
 
@@ -94,7 +94,7 @@ export default defineNuxtConfig({
   },
 
   i18n: {
-    baseUrl: 'https://ozakboy.github.io',
+    baseUrl: 'https://ozalog.ozakboy.life',
     locales: [
       { code: 'zh-TW', name: '繁體中文', file: 'zh-TW.json' },
       { code: 'en', name: 'English', file: 'en.json' },
@@ -109,7 +109,7 @@ export default defineNuxtConfig({
     },
   },
 
-  // Sitemap: 自動產 sitemap.xml,部署後位於 https://ozakboy.github.io/OzaLog/sitemap.xml
+  // Sitemap: 自動產 sitemap.xml,部署後位於 https://ozalog.ozakboy.life/sitemap.xml
   // 自動掃描 pages/ 內路由 + i18n locale 變體
   sitemap: {
     autoLastmod: true,
