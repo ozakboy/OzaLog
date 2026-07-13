@@ -242,6 +242,8 @@ AI.md
 AI-Development-Guidelines.md
 STRATEGIC-DECISIONS.md
 .claude/
+# 舊 AI 規範文件歸檔(claude-harness 遷移備份,公開 repo 不入版控)
+docs/archive/
 
 # BenchmarkDotNet 輸出（會在每次跑 benchmark 後重生成，不該入版控）
 BenchmarkDotNet.Artifacts/
