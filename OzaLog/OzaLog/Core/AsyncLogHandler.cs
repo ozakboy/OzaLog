@@ -13,6 +13,7 @@ namespace OzaLog.Core
     /// v3.0 與 v2.x 的差異：
     /// • LogItem 改 readonly struct（零 GC 壓力）
     /// • Backpressure 改為 drop oldest（觸發 OnDropped），不再降級為呼叫端同步寫入
+    /// • v3.1.1：Error / Fatal 與 immediateFlush 的項目只走呼叫端同步寫入，不再重複入隊
     /// • 格式化在 dispatcher 完成（呼叫端不打 DateTime.Now / string.Format）
     /// • 過期清理改為背景 timer，不在 hot path
     /// • 100ms 定期 flush 由 FileStreamPool 透過 timer 處理
@@ -55,11 +56,26 @@ namespace OzaLog.Core
         /// <summary>
         /// 入隊。呼叫端執行緒成本：1× volatile read（cache 大小）+ 1× ConcurrentQueue.Enqueue（CAS）+ 1× SemaphoreSlim.Release。
         /// 若 queue 已滿，dequeue 一筆最舊的（drop oldest），觸發 OnDropped。
+        /// Error / Fatal 與 immediateFlush 的項目改走呼叫端同步寫入，**不入隊**（見下方說明）。
         /// </summary>
         public static void Enqueue(in LogItem item)
         {
             if (Interlocked.CompareExchange(ref _initialized, 0, 0) == 0)
                 Initialize();
+
+            // 立即落檔路徑：由呼叫端執行緒同步寫入 + flush 確保落盤（crash 前一定看得到）。
+            // ⚠️ 寫完就 return，不可再入隊：入隊會讓 dispatcher 之後把同一筆再寫一次，
+            //    造成日誌檔出現兩行完全相同的內容（v3.1.0 bug，錯誤筆數被灌水一倍）。
+            // ⚠️ 用明確等式判斷，避免 LogLevel.CustomName=99 被 >= Fatal 條件誤判為高嚴重性
+            bool isAutoFlush = item.Level == LogLevel.Error || item.Level == LogLevel.Fatal;
+            if (item.RequireImmediateFlush || isAutoFlush)
+            {
+                LogText.Write(in item);
+                // LogText.Write 只在 RequireImmediateFlush 時自行 flush，自動 flush 級別需在此補上
+                if (!item.RequireImmediateFlush)
+                    FileStreamPool.Flush(item.Level, item.Name);
+                return;
+            }
 
             // Drop oldest：滿時先丟一筆最舊的
             var max = CurrentAsyncOptions.MaxQueueSize;
@@ -80,15 +96,6 @@ namespace OzaLog.Core
 
             // 釋放 signal；若已被釋放過 dispatcher 仍在處理，本 release 是無傷的（會在 WaitAsync 等待時立刻通過）
             try { _signal.Release(); } catch (SemaphoreFullException) { }
-
-            // 重要級別 / 立即 flush：直接同步寫入 + flush 確保落盤（不阻塞 dispatcher）
-            // ⚠️ 用明確等式判斷，避免 LogLevel.CustomName=99 被 >= Fatal 條件誤判為高嚴重性
-            bool isAutoFlush = item.Level == LogLevel.Error || item.Level == LogLevel.Fatal;
-            if (item.RequireImmediateFlush || isAutoFlush)
-            {
-                LogText.Write(in item);
-                FileStreamPool.Flush(item.Level, item.Name);
-            }
         }
 
         private static async Task ProcessLogQueueAsync()

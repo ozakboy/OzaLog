@@ -46,7 +46,8 @@ namespace OzaLog
             if (LogConfiguration.Current.EnableAsyncLogging)
                 AsyncLogHandler.Enqueue(in item);
             else
-                LogText.Write(in item);
+                // 同步模式沒有 dispatcher 與定期 flush timer，必須逐筆 flush，否則內容會留在緩衝裡消失
+                LogText.WriteSync(in item);
         }
 
         private static void LogObject<T>(LogLevel level, T obj, string name = "", string message = "", bool writeTxt = true, bool _immediateFlush = false, string[] args = null) where T : class

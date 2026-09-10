@@ -58,7 +58,24 @@ OzaLog 內含兩條**獨立**的非同步管線:
 
 ### 1.4 Immediate flush
 
-`Error` 與 `Fatal` 級別(以及任何 `immediateFlush: true` 的呼叫)會在呼叫端執行緒同步寫入 + `FileStream.Flush(flushToDisk: true)`,額外做一次。這保證 crash log 在程式死掉前落盤。
+`Error` 與 `Fatal` 級別(以及任何 `immediateFlush: true` 的呼叫)**不入隊**,直接在呼叫端執行緒同步寫入 + `FileStream.Flush(flushToDisk: true)`。這保證 crash log 在程式死掉前落盤。
+
+因為完全繞過佇列,這些項目:
+
+- 每筆只寫入一次(v3.1.0 會同時入隊又同步寫,導致每筆出現兩行 — 已於 v3.1.1 修正)
+- 不受 drop-oldest 背壓影響,不可能被丟棄
+- 寫入順序相對於**同一個 `(level, name)` 檔案**仍是呼叫順序;跨檔案的先後可能與非同步項目輕微錯位(以行內時間戳為準)
+
+> ⚠️ 判斷式必須寫 `level == Error || level == Fatal`,不可寫 `level >= Error` — `LogLevel.CustomName = 99` 會誤中,讓每筆 CustomName 都變成同步 + fsync。
+
+### 1.4.1 同步模式(`EnableAsyncLogging = false`)
+
+設為 `false` 時完全不啟動上面這條管線:沒有佇列、沒有 dispatcher、沒有背壓(因此不會 drop 任何一筆)。呼叫端執行緒直接格式化並寫入 `FileStreamPool`,**每筆寫完立即 flush**(`StreamWriter` / `FileStream` 層級,不強制 `fsync`),所以寫完馬上讀得到。
+
+- 寫入仍由 `FileStreamPool` 的 lock 保護 → 多執行緒安全
+- 輸出格式與非同步模式**完全相同**(共用同一個 formatter)
+- v3.1.0 的同步模式因為沒有人 flush,內容會全部留在緩衝裡消失(檔案 0 bytes)— 已於 v3.1.1 修正
+- 換日與 size 分割照常運作;但**過期清理(`KeepDays`)不會執行** — `LogRetentionCleaner` 隨非同步管線一起啟動,同步模式下需自行清理舊目錄
 
 ### 1.5 Disk flush timer
 

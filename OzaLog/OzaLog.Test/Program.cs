@@ -15,26 +15,30 @@ Console.OutputEncoding = Encoding.UTF8;
 //         OutputFormat (Txt/Log/Json)、Quote pipeline (所有多載 + 錯誤情境)
 //
 // 使用方式:
-//   dotnet run --project OzaLog.Test -- [main-fmt] [quote-fmt]
-//     main-fmt:  txt | log | json   (預設 txt)
-//     quote-fmt: txt | log | json   (預設 json)
+//   dotnet run --project OzaLog.Test -- [main-fmt] [quote-fmt] [write-mode]
+//     main-fmt:   txt | log | json   (預設 txt)
+//     quote-fmt:  txt | log | json   (預設 json)
+//     write-mode: async | sync       (預設 async;sync = EnableAsyncLogging=false)
 //
 //   範例:
-//     dotnet run --project OzaLog.Test                  → 主 txt,報價 json
-//     dotnet run --project OzaLog.Test -- json json     → 全 JSON
-//     dotnet run --project OzaLog.Test -- log txt       → 主 log,報價 txt
+//     dotnet run --project OzaLog.Test                   → 主 txt,報價 json,非同步
+//     dotnet run --project OzaLog.Test -- json json      → 全 JSON
+//     dotnet run --project OzaLog.Test -- log txt        → 主 log,報價 txt
+//     dotnet run --project OzaLog.Test -- txt json sync  → 主 logger 走同步寫入路徑
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── 命令列引數 ──────────────────────────────────────────────────────────
 var mainFormat = args.Length >= 1 ? ParseLogFormat(args[0]) : LogOutputFormat.Txt;
 var quoteFormat = args.Length >= 2 ? ParseQuoteFormat(args[1]) : QuoteOutputFormat.Json;
+var asyncLogging = args.Length < 3 || ParseWriteMode(args[2]);
 
-Header("OzaLog v3.1.0 console smoke test");
+Header("OzaLog v3.1.1 console smoke test");
 Console.WriteLine($"  PID:           {Environment.ProcessId}");
 Console.WriteLine($"  BaseDir:       {AppContext.BaseDirectory}");
 Console.WriteLine($"  Runtime:       {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
 Console.WriteLine($"  Main format:   {mainFormat}");
 Console.WriteLine($"  Quote format:  {quoteFormat}");
+Console.WriteLine($"  Write mode:    {(asyncLogging ? "async(dispatcher)" : "sync(呼叫端直接寫入)")}");
 Console.WriteLine();
 
 // ─── v3.1 設定:涵蓋所有新選項 ────────────────────────────────────────────
@@ -45,7 +49,7 @@ LOG.Configure(o =>
     // ── v3.0 既有選項 ──
     o.KeepDays = -7;
     o.SetFileSizeInMB(10);
-    o.EnableAsyncLogging = true;
+    o.EnableAsyncLogging = asyncLogging;
     o.EnableConsoleOutput = false;
     o.MaxOpenFileStreams = 50;              // 故意低於後續 100 商品數,測 LRU
     o.DiskFlushIntervalMs = 100;
@@ -595,6 +599,14 @@ static LogOutputFormat ParseLogFormat(string s) => s.ToLowerInvariant() switch
     "log" => LogOutputFormat.Log,
     "json" => LogOutputFormat.Json,
     _ => throw new ArgumentException($"未知 main-format '{s}'(允許 txt|log|json)"),
+};
+
+// 回傳 true 代表非同步(dispatcher)模式,false 代表同步寫入模式
+static bool ParseWriteMode(string s) => s.ToLowerInvariant() switch
+{
+    "async" => true,
+    "sync" => false,
+    _ => throw new ArgumentException($"未知 write-mode '{s}'(允許 async|sync)"),
 };
 
 static QuoteOutputFormat ParseQuoteFormat(string s) => s.ToLowerInvariant() switch

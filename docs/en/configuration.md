@@ -47,7 +47,7 @@ LOG.Configure(o =>
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `EnableAsyncLogging` | `bool` | `true` | If `false`, calls write synchronously on the caller thread (no batching, no FileStream pool — slower for HFT but simpler to reason about). |
+| `EnableAsyncLogging` | `bool` | `true` | If `false`, calls format and write synchronously on the caller thread and flush right away — no queue, no dispatcher, no backpressure (nothing is ever dropped), and the entry is readable as soon as the call returns. Slower for HFT but simpler to reason about; still thread-safe, and the output format is identical to async mode. Note that retention cleanup (`KeepDays`) does not run in this mode. Fixed in v3.1.1 — earlier versions never flushed this path and produced empty files. |
 | `EnableConsoleOutput` | `bool` | `true` | If `true`, every log line is also written to `Console.WriteLine` on the caller thread. |
 | `MaxOpenFileStreams` | `int` | `100` (range `[4, 4096]`) | LRU upper bound for the persistent `FileStreamPool`. When exceeded, the least-recently-written stream is closed. |
 | `DiskFlushIntervalMs` | `int` | `100` (range `[10, 10000]`) | Period for `FileStreamPool.FlushAll()` — buffered writes flushed to disk (but not `fsync`-ed; OS decides write-back). |

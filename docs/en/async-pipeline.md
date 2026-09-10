@@ -58,7 +58,24 @@ This guarantees the queue never grows unbounded — OOM cannot happen from log s
 
 ### 1.4 Immediate flush
 
-`Error` and `Fatal` levels (and any call with `immediateFlush: true`) trigger synchronous write + `FileStream.Flush(flushToDisk: true)` on the caller thread, in addition to the async enqueue. This guarantees crash logs reach disk before the process dies.
+`Error` and `Fatal` levels (and any call with `immediateFlush: true`) are **not enqueued**. They are written synchronously on the caller thread followed by `FileStream.Flush(flushToDisk: true)`. This guarantees crash logs reach disk before the process dies.
+
+Because they bypass the queue entirely, these entries:
+
+- Are written exactly once (v3.1.0 both enqueued *and* wrote them synchronously, producing two identical lines per entry — fixed in v3.1.1)
+- Are never subject to drop-oldest backpressure, so they cannot be discarded
+- Keep caller order within the same `(level, name)` file; ordering across files may drift slightly against asynchronous entries (the in-line timestamp is the source of truth)
+
+> ⚠️ The predicate must be `level == Error || level == Fatal`, never `level >= Error` — `LogLevel.CustomName = 99` would match and turn every CustomName entry into a synchronous + fsync write.
+
+### 1.4.1 Synchronous mode (`EnableAsyncLogging = false`)
+
+Setting this to `false` starts none of the pipeline above: no queue, no dispatcher, no backpressure (so nothing is ever dropped). The caller thread formats and writes into the `FileStreamPool` directly and **flushes after every entry** (at `StreamWriter` / `FileStream` level, no forced `fsync`), so the content is readable immediately after the call returns.
+
+- Writes are still guarded by the `FileStreamPool` lock → thread-safe
+- Output formatting is **identical** to asynchronous mode (same formatter)
+- In v3.1.0 nothing ever flushed this path, so the content stayed in the buffer and was lost (0-byte files) — fixed in v3.1.1
+- Day rollover and size-based splitting work as usual, but **retention cleanup (`KeepDays`) does not run** — `LogRetentionCleaner` starts together with the asynchronous pipeline, so synchronous-mode hosts must prune old directories themselves
 
 ### 1.5 Disk flush timer
 

@@ -48,6 +48,8 @@ LOG.Info_Log<T>(string message, T obj, bool writeTxt = true, bool immediateFlush
 
 `Error_Log` and `Fatal_Log` **always** trigger synchronous immediate flush regardless of the `immediateFlush` argument. This ensures crash logs reach disk before the process dies. Other levels respect the `immediateFlush` argument (default `false`).
 
+Entries taking this path are **not enqueued** — the caller thread writes them, so each produces exactly one line and none can be discarded by drop-oldest backpressure when the queue is full. (v3.1.0 both enqueued and wrote them synchronously, duplicating every such entry — fixed in v3.1.1.)
+
 #### Object overload behavior
 
 - When `obj is Exception` and `level >= Warn`, the object is serialized via `ExceptionHandler.CreateSerializableException(...)`, which recursively expands `InnerException`, `Data` dictionary, `StackTrace`, and reflected non-standard properties.

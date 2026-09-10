@@ -6,7 +6,7 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <PackageId>OzaLog</PackageId>
     <AssemblyName>OzaLog</AssemblyName>
-    <PackageVersion>3.1.0</PackageVersion>
+    <PackageVersion>3.1.1</PackageVersion>
     <RootNamespace>OzaLog</RootNamespace>
     <LangVersion>latest</LangVersion>
 
@@ -30,32 +30,22 @@
     <Title>OzaLog — Lean .NET local file logger</Title>
     <!-- PackageReleaseNotes 由 uplog 指令在每次發版時更新;與英文 changelog 對齊 -->
     <PackageReleaseNotes>
-v3.1.0 — Three new capabilities: customizable time/thread display, configurable output format, and a dedicated Quote pipeline for HFT tick/quote data. All additions are backward compatible (defaults preserve v3.0 behavior).
+v3.1.1 — Two bug fixes that affect whether you can trust your logs. No API changes, no default value changes.
 
-ADDED:
-- Customizable time format: LogOptions.TimeFormat (free-form .NET DateTime format string, default "HH:mm:ss.fff").
-- Independent thread ID / name display toggles: LogOptions.ShowThreadId (default true) + LogOptions.ShowThreadName (default false).
-- High-precision timestamp opt-in: LogOptions.HighPrecisionTimestamp (Stopwatch-hybrid, reconstructs us-level precision from the 1ms cache).
-- Multiple output formats: LogOptions.OutputFormat = Txt | Log | Json. JSON mode emits NDJSON with fixed schema {ts, lv, nm, tid?, tn?, msg, data?} and epoch_ms timestamps.
-- Quote pipeline (opt-in via opt.ConfigureQuote(q =&gt; q.Enable = true)): LOG.Quote(...) and LOG.QuoteTicker(...) APIs with field names aligned to Binance REST 24hr Ticker schema (Last/LastQty/Bid/BidQty/Ask/AskQty/Open/PrevClose/High/Low/Volume/QuoteVolume).
-- QuoteRecord (public readonly struct) with Extras (Dictionary, reflection-friendly) and ExtrasJson (raw JSON string, zero-overhead) — mutually exclusive.
-- Filename auto-sanitization: filesystem-invalid chars in Symbol/Bucket replaced with '-' in filenames; original text preserved in content.
-- 48 xUnit tests covering custom formats, NDJSON output, Quote schema/error paths, and sanitization.
-
-IMPROVED:
-- All Quote API overloads funnel through LOG.Quote(in QuoteRecord) for synchronous validation. Errors throw ArgumentException on the calling thread, not deferred to the dispatcher.
-- LogFormatter retains the zero-alloc fast path for the default "HH:mm:ss.fff" format; other formats route through DateTime.ToString with FormatException fallback.
-- FileStreamPool supports per-output extension (.txt / .log / .json) with corresponding part-detection.
+FIXED:
+- Error / Fatal entries (and any call with immediateFlush: true) were written TWICE. AsyncLogHandler.Enqueue queued the item for the dispatcher and also wrote it synchronously on the caller thread, so each entry appeared as two identical lines. If you have been counting errors from your logs, every number before 3.1.1 was double the real count — recalibrate any error-rate alert thresholds. These entries are now written only once, on the caller thread, with the immediate-flush guarantee unchanged; as a side benefit they no longer pass through the queue and can never be discarded by drop-oldest backpressure. Trace / Debug / Info / Warn / CustomName were not affected.
+- Synchronous mode (EnableAsyncLogging = false) produced 0-byte log files. The synchronous path wrote into a StreamWriter with AutoFlush = false and nothing ever flushed it — the dispatcher, the periodic disk-flush timer and the ProcessExit hook are all started by the async pipeline, which synchronous mode never reaches, so the content was lost when the process exited. If you have been using synchronous mode, your log files have been empty all along. Synchronous mode now flushes after every entry (no forced fsync), stays thread-safe, and produces formatting identical to asynchronous mode.
 
 TECHNICAL:
-- System.Text.Json: 8.0.5 → 9.0.16 for netstandard2.0/2.1 (net8/9/10 still use BCL built-in — zero NuGet dependencies).
-- Microsoft.SourceLink.GitHub: 8.0.0 → 10.0.300 (build-only, PrivateAssets=all, no consumer impact).
-- New internal types: JsonLogFormatter, QuoteFormatter, QuoteFileStreamPool, QuoteLogHandler. Quote pipeline runs entirely in parallel with the main AsyncLogHandler.
+- FileStreamPool.Flush gained a flushToDisk parameter (default true; existing behavior unchanged).
+- New internal LogText.WriteSync used by the synchronous path.
+- New regression tests (DuplicateWriteTests, SyncModeWriteTests); AutoFlushLevelTests still guards LogLevel.CustomName = 99 against being treated as auto-flush.
 - Verified across all 5 TargetFrameworks (netstandard2.0/2.1, net8.0/9.0/10.0) with 0 errors.
 
 Full changelog: https://github.com/ozakboy/OzaLog/blob/main/docs/en/changelog.md
-Migration guide (v2.x → v3.x): https://github.com/ozakboy/OzaLog/blob/main/docs/en/migration.md
+Async pipeline details: https://github.com/ozakboy/OzaLog/blob/main/docs/en/async-pipeline.md
 Website: https://ozakboy.github.io/OzaLog/
+
     </PackageReleaseNotes>
 
 

@@ -490,6 +490,7 @@
             v3.0 與 v2.x 的差異：
             • LogItem 改 readonly struct（零 GC 壓力）
             • Backpressure 改為 drop oldest（觸發 OnDropped），不再降級為呼叫端同步寫入
+            • v3.1.1：Error / Fatal 與 immediateFlush 的項目只走呼叫端同步寫入，不再重複入隊
             • 格式化在 dispatcher 完成（呼叫端不打 DateTime.Now / string.Format）
             • 過期清理改為背景 timer，不在 hot path
             • 100ms 定期 flush 由 FileStreamPool 透過 timer 處理
@@ -499,6 +500,7 @@
             <summary>
             入隊。呼叫端執行緒成本：1× volatile read（cache 大小）+ 1× ConcurrentQueue.Enqueue（CAS）+ 1× SemaphoreSlim.Release。
             若 queue 已滿，dequeue 一筆最舊的（drop oldest），觸發 OnDropped。
+            Error / Fatal 與 immediateFlush 的項目改走呼叫端同步寫入，**不入隊**（見下方說明）。
             </summary>
         </member>
         <member name="T:OzaLog.Core.ExceptionHandler">
@@ -587,10 +589,18 @@
             寫入一行至對應檔案，自動處理建立、換日、大小分割、LRU。
             </summary>
         </member>
-        <member name="M:OzaLog.Core.FileStreamPool.Flush(OzaLog.Core.LogLevel,System.String)">
+        <member name="M:OzaLog.Core.FileStreamPool.Flush(OzaLog.Core.LogLevel,System.String,System.Boolean)">
             <summary>
-            強制 flush 指定 (level, name) 的緩衝至磁碟（用於 crash log / immediateFlush）
+            強制 flush 指定 (level, name) 的緩衝（用於 crash log / immediateFlush / 同步模式逐筆落檔）
+            Flushes the buffer of one (level, name) stream.
             </summary>
+            <param name="level">日誌級別 / Log level</param>
+            <param name="name">日誌名稱（CustomName 用）/ Log name</param>
+            <param name="flushToDisk">
+            是否強制寫入實體磁碟（fsync，預設 true）；false 時只把緩衝交給 OS，
+            與 <see cref="M:OzaLog.Core.FileStreamPool.FlushAll"/> 的定期 flush 行為一致（效能優先）。
+            Whether to force an fsync (default true); false only hands the buffer to the OS.
+            </param>
         </member>
         <member name="M:OzaLog.Core.FileStreamPool.FlushAll">
             <summary>
@@ -830,10 +840,23 @@
             v3.1+：依 <c>LogConfiguration.Current.OutputFormat</c> 路由到對應 formatter。
             </summary>
         </member>
+        <member name="M:OzaLog.Core.LogText.WriteSync(OzaLog.Core.LogItem@)">
+            <summary>
+            同步模式（<c>EnableAsyncLogging = false</c>）專用寫入 - 寫入後立即 flush，內容當下就讀得到。
+            Synchronous-mode write - appends then flushes immediately so the content is readable right away.
+            </summary>
+            <remarks>
+            v3.1.1 修正：同步模式沒有 dispatcher、沒有 100ms 定期 flush timer、也沒有 ProcessExit 收尾
+            （這三者都掛在 <c>AsyncLogHandler.Initialize</c>，同步模式從未觸發），
+            因此若沿用 <see cref="M:OzaLog.Core.LogText.Write(OzaLog.Core.LogItem@)"/>，內容會一直留在 StreamWriter 緩衝裡，
+            最後隨行程結束而全部消失（檔案建得出來但 0 bytes）。
+            這裡只做 StreamWriter / FileStream 層級的 flush（不強制 fsync），與非同步模式的定期 flush 行為一致。
+            </remarks>
+        </member>
         <member name="M:OzaLog.Core.LogText.Add_LogText(OzaLog.Core.LogLevel,System.String,System.String,System.Object[])">
             <summary>
             v2.x 相容入口 - 同步寫入路徑（EnableAsyncLogging=false 時呼叫）。
-            內部會建構 LogItem 並呼叫 <see cref="M:OzaLog.Core.LogText.Write(OzaLog.Core.LogItem@)"/>。
+            內部會建構 LogItem 並呼叫 <see cref="M:OzaLog.Core.LogText.WriteSync(OzaLog.Core.LogItem@)"/>（同步模式需逐筆 flush）。
             </summary>
         </member>
         <member name="T:OzaLog.Core.QuoteFileStreamPool">

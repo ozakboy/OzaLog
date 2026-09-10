@@ -10,6 +10,33 @@ description: OzaLog 所有重要變更紀錄。
 
 ---
 
+## [3.1.1] - 2026-09-11
+
+> 兩個影響日誌可信度的修正:`Error` / `Fatal` 每筆重複寫入兩次,以及同步模式(`EnableAsyncLogging = false`)完全寫不出內容。無 API 變更、無預設值變更。
+
+### 問題修正
+
+**`Error` / `Fatal` / `immediateFlush` 每筆寫入兩次**
+- `AsyncLogHandler.Enqueue` 會先把項目放進佇列(dispatcher 稍後寫一次),再在呼叫端同步寫一次以確保 crash 前落盤 — 同一筆 log 因此在檔案裡出現**兩行完全相同的內容**。影響 `Error_Log`、`Fatal_Log` 的全部多載,以及任何級別帶 `immediateFlush: true` 的呼叫;`Trace` / `Debug` / `Info` / `Warn` / `CustomName` 的一般呼叫不受影響。
+- **請注意:如果你之前用日誌統計錯誤筆數,3.1.1 以前的數字是實際值的兩倍**;以錯誤率設定的告警閾值需要重新校正。
+- 修正後這些項目改為**只走呼叫端同步寫入、不再入隊**,立即落檔的效能特性完全保留(仍是寫入後立刻 `Flush(flushToDisk: true)`)。附帶效果:自動 flush 的項目不再經過佇列,不可能被 drop-oldest 背壓丟棄。
+
+**同步模式(`EnableAsyncLogging = false`)寫出 0 bytes 檔案**
+- 同步路徑寫進 `StreamWriter`(`AutoFlush = false`)之後沒有任何人負責 flush:dispatcher、100ms 定期 flush timer、`ProcessExit` 收尾三者都掛在 `AsyncLogHandler.Initialize`,而同步模式從未走到那裡。結果是日誌檔建得出來、程式不報錯,但內容留在緩衝裡隨行程結束**全部消失**。
+- **請注意:如果你之前用同步模式,你的日誌檔一直是空的。**
+- 修正後同步模式逐筆 flush(`StreamWriter` / `FileStream` 層級,不強制 `fsync`,與非同步模式的定期 flush 行為一致),寫完立刻讀得到;寫入仍由 `FileStreamPool` 的 lock 保護,維持線程安全。同步與非同步模式產生的內容格式完全相同。
+- 佇列滿時的背壓自 v3.0 起就是 drop-oldest(不是降級為同步寫),因此不受本 bug 影響。
+
+### 技術改進
+
+- `FileStreamPool.Flush` 新增 `flushToDisk` 參數(預設 `true`,既有呼叫行為不變);同步模式以 `false` 呼叫,避免逐筆 `fsync`。
+- 新增內部方法 `LogText.WriteSync`(同步模式專用:寫入 + flush);`LogText.Add_LogText`(v2.x 相容入口)一併改走此路徑。
+- 新增 xUnit 測試:`DuplicateWriteTests`(Error / Fatal / `immediateFlush` 各只寫一次,其餘級別行為不變)、`SyncModeWriteTests`(同步寫入立即可讀、與非同步模式輸出同一行、多執行緒不掉行)。`AutoFlushLevelTests`(防 `CustomName = 99` 誤中自動 flush)維持通過。
+- `OzaLog.Test` smoke 程式新增第三個 CLI 引數 `write-mode`(`async` / `sync`,預設 `async`),可實測同步模式輸出。
+- 跨 5 個 TargetFrameworks(`netstandard2.0` / `netstandard2.1` / `net8.0` / `net9.0` / `net10.0`)的建置驗證:0 錯誤。
+
+---
+
 ## [3.1.0] - 2026-05-14
 
 > 三個新增能力:可自訂時間/執行緒顯示、可選輸出格式(txt/log/json)、以及對齊 Binance schema 的獨立報價(Quote)pipeline。所有新增向下相容 — 預設值維持 v3.0 行為。

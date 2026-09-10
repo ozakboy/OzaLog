@@ -10,6 +10,32 @@ Version numbers follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [3.1.1] - 2026-09-11
+
+> Two fixes that affect whether you can trust your logs: every `Error` / `Fatal` entry was written twice, and synchronous mode (`EnableAsyncLogging = false`) produced empty files. No API changes, no default value changes.
+
+### Fixed
+
+**`Error` / `Fatal` / `immediateFlush` entries were written twice**
+- `AsyncLogHandler.Enqueue` enqueued the item (written later by the dispatcher) *and* wrote it synchronously on the caller thread to guarantee it reached disk before a crash — so the same log entry appeared as **two identical lines** in the file. This affected every `Error_Log` / `Fatal_Log` overload and any call at any level with `immediateFlush: true`; ordinary `Trace` / `Debug` / `Info` / `Warn` / `CustomName` calls were not affected.
+- **Note: if you have been counting errors from your logs, every number before 3.1.1 was double the real count.** Alert thresholds based on error rates need to be recalibrated.
+- These entries now take **only** the synchronous caller-thread write and are no longer enqueued. The immediate-flush performance characteristic is fully preserved (still `Flush(flushToDisk: true)` right after the write). Side benefit: auto-flush entries no longer pass through the queue, so drop-oldest backpressure can never discard them.
+
+**Synchronous mode (`EnableAsyncLogging = false`) produced 0-byte files**
+- The synchronous path wrote into a `StreamWriter` with `AutoFlush = false` and nothing ever flushed it: the dispatcher, the 100 ms periodic disk-flush timer and the `ProcessExit` shutdown hook are all started by `AsyncLogHandler.Initialize`, which synchronous mode never reaches. The log file was created and no error was raised, but the content stayed in the buffer and **was lost when the process exited**.
+- **Note: if you have been using synchronous mode, your log files have been empty all along.**
+- Synchronous mode now flushes after every entry (at `StreamWriter` / `FileStream` level, no forced `fsync` — same behavior as the periodic flush in async mode), so the content is readable right away. Writes are still guarded by the `FileStreamPool` lock, so the path remains thread-safe. Synchronous and asynchronous mode produce byte-identical formatting for the same entry.
+- Queue-full backpressure has been drop-oldest since v3.0 (not a downgrade to synchronous writing), so that path was not affected by this bug.
+
+### Technical
+- `FileStreamPool.Flush` gained a `flushToDisk` parameter (default `true`, existing callers unchanged); synchronous mode passes `false` to avoid an `fsync` per entry.
+- New internal method `LogText.WriteSync` (synchronous mode: write + flush); `LogText.Add_LogText` (v2.x compatibility entry point) now routes through it as well.
+- New xUnit tests: `DuplicateWriteTests` (Error / Fatal / `immediateFlush` written exactly once, other levels unchanged) and `SyncModeWriteTests` (sync write readable immediately, same line as the async dispatcher, no lost lines under concurrency). `AutoFlushLevelTests` (guards against `LogLevel.CustomName = 99` being treated as auto-flush) still passes.
+- The `OzaLog.Test` smoke program gained a third CLI argument `write-mode` (`async` / `sync`, default `async`) so synchronous output can be inspected directly.
+- Build verified across all 5 TargetFrameworks (`netstandard2.0` / `netstandard2.1` / `net8.0` / `net9.0` / `net10.0`) with 0 errors.
+
+---
+
 ## [3.1.0] - 2026-05-14
 
 > Three new capabilities: customizable time/thread display, configurable output format (txt/log/json), and a dedicated **Quote** pipeline for high-frequency tick/quote data with Binance-aligned schema. All additions are backward compatible — defaults preserve v3.0 behavior.

@@ -76,9 +76,17 @@ namespace OzaLog.Core
         }
 
         /// <summary>
-        /// 強制 flush 指定 (level, name) 的緩衝至磁碟（用於 crash log / immediateFlush）
+        /// 強制 flush 指定 (level, name) 的緩衝（用於 crash log / immediateFlush / 同步模式逐筆落檔）
+        /// Flushes the buffer of one (level, name) stream.
         /// </summary>
-        public static void Flush(LogLevel level, string name)
+        /// <param name="level">日誌級別 / Log level</param>
+        /// <param name="name">日誌名稱（CustomName 用）/ Log name</param>
+        /// <param name="flushToDisk">
+        /// 是否強制寫入實體磁碟（fsync，預設 true）；false 時只把緩衝交給 OS，
+        /// 與 <see cref="FlushAll"/> 的定期 flush 行為一致（效能優先）。
+        /// Whether to force an fsync (default true); false only hands the buffer to the OS.
+        /// </param>
+        public static void Flush(LogLevel level, string name, bool flushToDisk = true)
         {
             var nameKey = string.IsNullOrEmpty(name) ? level.ToString() : name;
             var key = ((int)level).ToString() + "|" + nameKey;
@@ -90,7 +98,8 @@ namespace OzaLog.Core
                     try
                     {
                         node.Value.Writer?.Flush();
-                        node.Value.Stream?.Flush(flushToDisk: true);
+                        if (flushToDisk)
+                            node.Value.Stream?.Flush(flushToDisk: true);
                     }
                     catch (Exception ex)
                     {
