@@ -268,3 +268,6 @@ site/content/
 # 若本機要用 pnpm 也 OK,只是當你新增/移除依賴時請另外跑 npm install 同步 package-lock.json
 site/pnpm-lock.yaml
 
+
+# 發佈腳本的打包輸出(publish-package.ps1)
+artifacts/
