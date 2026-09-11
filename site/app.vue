@@ -11,9 +11,9 @@ const jsonLd = {
   operatingSystem: 'Cross-platform (.NET Standard 2.0+, .NET 8/9/10)',
   description:
     'Lean .NET local file logging library with the simplest possible static API. HFT-grade async pipeline (ConcurrentQueue + persistent FileStream pool + cached timestamp + drop-oldest backpressure). Zero NuGet dependencies on net8.0/9.0/10.0. Designed for high-throughput multi-threaded scenarios like cryptocurrency tick streams.',
-  url: 'https://ozakboy.github.io/OzaLog/',
+  url: 'https://ozalog.ozakboy.life/',
   downloadUrl: 'https://www.nuget.org/packages/OzaLog/',
-  image: 'https://ozakboy.github.io/OzaLog/logo.png',
+  image: 'https://ozalog.ozakboy.life/logo.png',
   author: {
     '@type': 'Person',
     name: 'ozakboy',
