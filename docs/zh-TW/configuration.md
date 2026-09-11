@@ -47,7 +47,7 @@ LOG.Configure(o =>
 
 | 選項 | 型別 | 預設 | 說明 |
 |---|---|---|---|
-| `EnableAsyncLogging` | `bool` | `true` | 若 `false`,呼叫端執行緒直接格式化、寫入並立即 flush — 無佇列、無 dispatcher、無背壓(不會丟任何一筆),呼叫返回後內容立刻讀得到。HFT 場景較慢但邏輯較直觀;仍為線程安全,輸出格式與非同步模式完全相同。注意此模式下過期清理(`KeepDays`)不會執行。v3.1.1 修正 — 舊版本此路徑從未 flush,會寫出空檔案。 |
+| `EnableAsyncLogging` | `bool` | `true` | 若 `false`,呼叫端執行緒直接格式化、寫入並立即 flush — 無佇列、無 dispatcher、無背壓(不會丟任何一筆),呼叫返回後內容立刻讀得到。HFT 場景較慢但邏輯較直觀;仍為線程安全,輸出格式與非同步模式完全相同。注意此模式下過期清理(`KeepDays`)不會執行。v3.2.0 修正 — 舊版本此路徑從未 flush,會寫出空檔案。 |
 | `EnableConsoleOutput` | `bool` | `true` | 若 `true`,每筆 log 也會在呼叫端執行緒 `Console.WriteLine` 一次。 |
 | `MaxOpenFileStreams` | `int` | `100`(範圍 `[4, 4096]`) | 持久化 `FileStreamPool` 的 LRU 上限。超過時關閉最久未寫入的 stream。 |
 | `DiskFlushIntervalMs` | `int` | `100`(範圍 `[10, 10000]`) | `FileStreamPool.FlushAll()` 的呼叫週期 — 緩衝寫入落盤(但不做 `fsync`,由 OS 決定 write-back 時機)。 |

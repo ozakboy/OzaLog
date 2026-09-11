@@ -6,7 +6,7 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <PackageId>OzaLog</PackageId>
     <AssemblyName>OzaLog</AssemblyName>
-    <PackageVersion>3.1.1</PackageVersion>
+    <PackageVersion>3.2.0</PackageVersion>
     <RootNamespace>OzaLog</RootNamespace>
     <LangVersion>latest</LangVersion>
 
@@ -30,17 +30,21 @@
     <Title>OzaLog — Lean .NET local file logger</Title>
     <!-- PackageReleaseNotes 由 uplog 指令在每次發版時更新;與英文 changelog 對齊 -->
     <PackageReleaseNotes>
-v3.1.1 — Two bug fixes that affect whether you can trust your logs. No API changes, no default value changes.
+v3.2.0 — Three fixes that change what actually lands in your log files. No API changes, no default value changes. Released as a minor version, not a patch, because the content of your logs changes: read the notes below before upgrading if anything downstream reads these files.
 
 FIXED:
-- Error / Fatal entries (and any call with immediateFlush: true) were written TWICE. AsyncLogHandler.Enqueue queued the item for the dispatcher and also wrote it synchronously on the caller thread, so each entry appeared as two identical lines. If you have been counting errors from your logs, every number before 3.1.1 was double the real count — recalibrate any error-rate alert thresholds. These entries are now written only once, on the caller thread, with the immediate-flush guarantee unchanged; as a side benefit they no longer pass through the queue and can never be discarded by drop-oldest backpressure. Trace / Debug / Info / Warn / CustomName were not affected.
+- Error / Fatal entries (and any call with immediateFlush: true) were written TWICE. AsyncLogHandler.Enqueue queued the item for the dispatcher and also wrote it synchronously on the caller thread, so each entry appeared as two identical lines. If you have been counting errors from your logs, your numbers were inflated — between 1x and 2x the real count, not a clean doubling, because the queued copy could still be discarded by drop-oldest backpressure when the queue was saturated. Recalibrate any error-rate alert thresholds. These entries are now written only once, on the caller thread, with the immediate-flush guarantee unchanged; as a side benefit they no longer pass through the queue and can never be dropped. Trace / Debug / Info / Warn / CustomName were not affected.
 - Synchronous mode (EnableAsyncLogging = false) produced 0-byte log files. The synchronous path wrote into a StreamWriter with AutoFlush = false and nothing ever flushed it — the dispatcher, the periodic disk-flush timer and the ProcessExit hook are all started by the async pipeline, which synchronous mode never reaches, so the content was lost when the process exited. If you have been using synchronous mode, your log files have been empty all along. Synchronous mode now flushes after every entry (no forced fsync), stays thread-safe, and produces formatting identical to asynchronous mode.
+- Curly braces in a message were doubled in the file output: serialized exceptions landed as {{ "Type": ... }} instead of { "Type": ... }, so the JSON could not be parsed. LOG.Log escaped every { and } up front for AppendFormat, but the no-arguments path appends the message directly and never unescapes it. BREAKING FOR LOG PARSERS: exception and object payloads are now emitted as valid, directly parsable JSON. If you built parsing or regex around the doubled braces, adjust it. Messages that mix literal braces with {0} placeholders now also format correctly — previously the whole message was emitted raw with the placeholder unsubstituted.
 
 TECHNICAL:
-- FileStreamPool.Flush gained a flushToDisk parameter (default true; existing behavior unchanged).
-- New internal LogText.WriteSync used by the synchronous path.
-- New regression tests (DuplicateWriteTests, SyncModeWriteTests); AutoFlushLevelTests still guards LogLevel.CustomName = 99 against being treated as auto-flush.
-- Verified across all 5 TargetFrameworks (netstandard2.0/2.1, net8.0/9.0/10.0) with 0 errors.
+- Brace escaping moved from the caller thread into the formatter, and now happens only on the AppendFormat path. Valid format items ({0}, {1,-8}, {2:F4}) are preserved; everything else is escaped, including out-of-range indexes that used to throw FormatException. Applies to both text and JSON output formats.
+- Removed the Microsoft.SourceLink.GitHub package reference. SourceLink has shipped in the SDK since .NET 8; PublishRepositoryUrl + EmbedUntrackedSources produce an identical nuspec repository element and identical source-link mappings in the PDBs on all five target frameworks, netstandard2.0 and 2.1 included. This clears the NU1902 vulnerability advisory on its transitive Microsoft.Build.Tasks.Git dependency. Build-only change; consumers are unaffected.
+- Added XML documentation for the 16 remaining public members of LogConfiguration. The library now builds with 0 warnings on all five target frameworks.
+- New regression tests (BraceEscapingTests) covering literal braces with and without format arguments, both output formats, and exception payloads verified by actually parsing them with System.Text.Json. DuplicateWriteTests, SyncModeWriteTests and AutoFlushLevelTests still pass; 73 tests green.
+
+KNOWN LIMITATION:
+- Synchronous mode still has no retention cleanup (KeepDays does not take effect without the async pipeline). Clean old date directories yourself, or use asynchronous mode.
 
 Full changelog: https://github.com/ozakboy/OzaLog/blob/main/docs/en/changelog.md
 Async pipeline details: https://github.com/ozakboy/OzaLog/blob/main/docs/en/async-pipeline.md
@@ -101,11 +105,12 @@ Website: https://ozakboy.github.io/OzaLog/
     <PackageReference Include="System.Text.Json" Version="9.0.16" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-  </ItemGroup>
+  <!--
+    SourceLink：v3.2.0 起移除 Microsoft.SourceLink.GitHub 套件參照。
+    .NET 8 起 SourceLink 已內建於 SDK，只要有 PublishRepositoryUrl + EmbedUntrackedSources
+    就會產生完整的 <repository ... branch=... commit=... />（五個 TFM 實測與外掛套件結果相同）。
+    移除的動機是該套件的傳遞相依 Microsoft.Build.Tasks.Git 帶有弱點公告（NU1902），
+    而它只在建置期用到、對消費者毫無價值；相依樹也因此更乾淨。
+  -->
 
 </Project>

@@ -41,13 +41,26 @@ namespace OzaLog.Tests
         [Fact]
         public void EscapeMessage_LeavesNumericPlaceholdersAlone()
         {
-            Assert.Equal("user {0} did {1}", LogFormatter.EscapeMessage("user {0} did {1}"));
+            Assert.Equal("user {0} did {1}", LogFormatter.EscapeMessage("user {0} did {1}", 2));
         }
 
         [Fact]
-        public void EscapeMessage_DoublesUnpairedBraces()
+        public void EscapeMessage_DoublesNonPlaceholderBraces()
         {
-            Assert.Equal("plain {{text}}", LogFormatter.EscapeMessage("plain {text}"));
+            Assert.Equal("plain {{text}}", LogFormatter.EscapeMessage("plain {text}", 1));
+        }
+
+        [Fact]
+        public void EscapeMessage_EscapesOutOfRangePlaceholder()
+        {
+            // {2} 超出 args 範圍 → 當字面量跳脫,不讓 AppendFormat 拋 FormatException
+            Assert.Equal("broken {{2}}", LogFormatter.EscapeMessage("broken {2}", 1));
+        }
+
+        [Fact]
+        public void EscapeMessage_KeepsAlignmentAndFormatSections()
+        {
+            Assert.Equal("{0,-8}|{1:F4}", LogFormatter.EscapeMessage("{0,-8}|{1:F4}", 2));
         }
     }
 }

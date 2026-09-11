@@ -13,7 +13,7 @@ namespace OzaLog.Core
     /// v3.0 與 v2.x 的差異：
     /// • LogItem 改 readonly struct（零 GC 壓力）
     /// • Backpressure 改為 drop oldest（觸發 OnDropped），不再降級為呼叫端同步寫入
-    /// • v3.1.1：Error / Fatal 與 immediateFlush 的項目只走呼叫端同步寫入，不再重複入隊
+    /// • v3.2.0：Error / Fatal 與 immediateFlush 的項目只走呼叫端同步寫入，不再重複入隊
     /// • 格式化在 dispatcher 完成（呼叫端不打 DateTime.Now / string.Format）
     /// • 過期清理改為背景 timer，不在 hot path
     /// • 100ms 定期 flush 由 FileStreamPool 透過 timer 處理

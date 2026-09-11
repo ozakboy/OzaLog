@@ -5,7 +5,7 @@ using Xunit;
 namespace OzaLog.Tests
 {
     /// <summary>
-    /// 防回歸（v3.1.1）：Error / Fatal 與 immediateFlush 的立即落檔路徑不可造成重複寫入。
+    /// 防回歸（v3.2.0）：Error / Fatal 與 immediateFlush 的立即落檔路徑不可造成重複寫入。
     /// v3.1.0 的 AsyncLogHandler.Enqueue 會先入隊、再同步寫一次，dispatcher 之後又寫一次 → 每筆兩行。
     /// </summary>
     public class DuplicateWriteTests

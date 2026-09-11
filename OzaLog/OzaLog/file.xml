@@ -40,6 +40,53 @@
             Log Retention Days - Defines how long log files are kept
             </summary>
         </member>
+        <member name="P:OzaLog.LogConfiguration.ILogOptions.MaxFileSize">
+            <summary>
+            單一日誌檔的大小上限(bytes),超過就自動切下一個 part 檔,預設 50MB。
+            設得過小會讓同一天的日誌碎成大量 part 檔,增加開檔次數並拖慢寫入。
+            Max size of a single log file in bytes (default 50MB); exceeding it starts a new part file.
+            Setting it too small fragments a day into many part files and slows writing down.
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogOptions.LogPath">
+            <summary>
+            日誌根目錄,相對於 <c>AppDomain.CurrentDomain.BaseDirectory</c>(不是行程的目前目錄),
+            預設 <c>"logs"</c>。實際路徑為 <c>{BaseDirectory}/{LogPath}/{yyyyMMdd}/{類型目錄}/</c>。
+            Log root directory, resolved against AppDomain.CurrentDomain.BaseDirectory (not the
+            current working directory); default "logs".
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogOptions.TypeDirectories">
+            <summary>
+            各日誌級別的子目錄設定(唯讀視圖)。未個別指定的級別一律落在
+            <see cref="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath"/>。
+            Per-level subdirectory settings (read-only view); levels left unset fall back to DirectoryPath.
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogOptions.EnableAsyncLogging">
+            <summary>
+            是否啟用非同步寫入(預設 <c>true</c>)。<c>true</c> 時呼叫端只入隊,由 dispatcher 執行緒批次落檔;
+            <c>false</c> 時由呼叫端直接寫入並逐筆 flush(延遲較低但吞吐大幅下降),
+            且同步模式沒有背景清理器,過期目錄需自行清理。
+            Whether asynchronous logging is enabled (default true). When false, entries are written and
+            flushed on the calling thread — lower latency, far lower throughput, and no background retention cleanup.
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogOptions.EnableConsoleOutput">
+            <summary>
+            是否同時把日誌輸出到主控台(預設 <c>true</c>)。輸出發生在呼叫端執行緒,
+            高頻情境下 <c>Console.WriteLine</c> 會成為瓶頸,壓測與正式環境建議關閉。
+            Whether to also write to the console (default true). The write happens on the calling thread,
+            so Console.WriteLine becomes the bottleneck under high throughput — turn it off in production.
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogOptions.AsyncOptions">
+            <summary>
+            非同步管線的批次 / 佇列 / 定時 flush 設定(唯讀視圖);
+            <see cref="P:OzaLog.LogConfiguration.ILogOptions.EnableAsyncLogging"/> 為 <c>false</c> 時整組不生效。
+            Read-only view of the async pipeline settings; ignored when EnableAsyncLogging is false.
+            </summary>
+        </member>
         <member name="P:OzaLog.LogConfiguration.ILogOptions.EnableGlobalExceptionCapture">
             <summary>
             v3.0+ 是否啟用全域意外攔截（預設 false）
@@ -93,6 +140,79 @@
             <summary>
             v3.1+ 報價 pipeline 的唯讀設定視圖
             </summary>
+        </member>
+        <member name="T:OzaLog.LogConfiguration.ILogTypeDirectories">
+            <summary>
+            日誌類型目錄的唯讀視圖 - 對外揭露各級別實際使用的子目錄名稱。
+            Read-only view of the per-level log directories.
+            </summary>
+            <remarks>
+            這些值都是「日期目錄底下的子目錄名稱」,不是完整路徑;
+            完整路徑為 <c>{BaseDirectory}/{LogPath}/{yyyyMMdd}/{此處的目錄名}/</c>。
+            </remarks>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath">
+            <summary>
+            所有級別的預設子目錄名稱(預設 <c>"LogFiles"</c>)。
+            各級別未個別指定時一律落在這裡,亦即全部級別混在同一個目錄。
+            Default subdirectory for every level (default "LogFiles"); levels without an explicit
+            directory all land here.
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogTypeDirectories.TracePath">
+            <summary>
+            Trace 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath"/>(預設未設定)。
+            Subdirectory for Trace; falls back to DirectoryPath when null (default: not set).
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogTypeDirectories.DebugPath">
+            <summary>
+            Debug 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath"/>(預設未設定)。
+            Subdirectory for Debug; falls back to DirectoryPath when null (default: not set).
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogTypeDirectories.InfoPath">
+            <summary>
+            Info 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath"/>(預設未設定)。
+            Subdirectory for Info; falls back to DirectoryPath when null (default: not set).
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogTypeDirectories.WarnPath">
+            <summary>
+            Warn 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath"/>(預設未設定)。
+            Subdirectory for Warn; falls back to DirectoryPath when null (default: not set).
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogTypeDirectories.ErrorPath">
+            <summary>
+            Error 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath"/>(預設未設定)。
+            想把錯誤獨立出來給監控系統掃描時,設定這一項最直接。
+            Subdirectory for Error; falls back to DirectoryPath when null (default: not set).
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogTypeDirectories.FatalPath">
+            <summary>
+            Fatal 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath"/>(預設未設定)。
+            Subdirectory for Fatal; falls back to DirectoryPath when null (default: not set).
+            </summary>
+        </member>
+        <member name="P:OzaLog.LogConfiguration.ILogTypeDirectories.CustomPath">
+            <summary>
+            CustomName 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath"/>(預設未設定)。
+            每個 CustomName 各自一個檔案,全部放在這個目錄下。
+            Subdirectory for CustomName entries; falls back to DirectoryPath when null (default: not set).
+            </summary>
+        </member>
+        <member name="M:OzaLog.LogConfiguration.ILogTypeDirectories.GetPathForType(OzaLog.Core.LogLevel)">
+            <summary>
+            取得指定級別實際要用的子目錄名稱(已套用退回 <see cref="P:OzaLog.LogConfiguration.ILogTypeDirectories.DirectoryPath"/> 的規則)。
+            Resolves the subdirectory actually used by a level, with the DirectoryPath fallback applied.
+            </summary>
+            <param name="logLevel">日誌級別 / The log level</param>
+            <returns>
+            該級別的子目錄名稱;未列舉到的級別一律比照 CustomName 處理。
+            The subdirectory for that level; unlisted levels are treated as CustomName.
+            </returns>
         </member>
         <member name="M:OzaLog.LogConfiguration.ReadOnlyLogTypeDirectories.GetPathForType(OzaLog.Core.LogLevel)">
             <summary>
@@ -490,7 +610,7 @@
             v3.0 與 v2.x 的差異：
             • LogItem 改 readonly struct（零 GC 壓力）
             • Backpressure 改為 drop oldest（觸發 OnDropped），不再降級為呼叫端同步寫入
-            • v3.1.1：Error / Fatal 與 immediateFlush 的項目只走呼叫端同步寫入，不再重複入隊
+            • v3.2.0：Error / Fatal 與 immediateFlush 的項目只走呼叫端同步寫入，不再重複入隊
             • 格式化在 dispatcher 完成（呼叫端不打 DateTime.Now / string.Format）
             • 過期清理改為背景 timer，不在 hot path
             • 100ms 定期 flush 由 FileStreamPool 透過 timer 處理
@@ -663,9 +783,8 @@
             把 \n 之後的 JSON 部分提取出來,當作 data 欄位寫入。失敗則不寫 data。
             </summary>
             <remarks>
-            注意:呼叫端會先走 LogFormatter.EscapeMessage,該方法會把 <c>{</c>/<c>}</c> 雙倍化(<c>{{</c>/<c>}}</c>)。
-            因此 JSON 部分實際長相是 <c>{{"foo":"bar"}}</c>,需先反跳脫才能 parse。
-            先嘗試 raw parse(萬一有人直接傳合法 JSON 字串進 message),失敗再嘗試反跳脫。
+            v3.2 起呼叫端不再把 <c>{</c>/<c>}</c> 雙倍化,message 裡的 JSON 就是原樣的合法 JSON,
+            直接 parse 即可(舊版必須先反跳脫 <c>{{</c>/<c>}}</c>,該退路已隨跳脫時機修正而移除)。
             </remarks>
         </member>
         <member name="T:OzaLog.Core.LogFormatter">
@@ -673,6 +792,7 @@
             日誌格式化處理器 - 將 LogItem 轉為要寫入檔案的單行字串。
             v3.0：格式化全部移到 dispatcher 執行緒，呼叫端不再做 string.Format / StringBuilder。
             v3.1：時間格式變為使用者可設定的 .NET DateTime 格式;支援 Thread ID/Name 顯示開關。
+            v3.2：大括號跳脫改為只在真的要走 <c>AppendFormat</c> 時才做,訊息裡的 <c>{}</c> 原樣落檔。
             </summary>
         </member>
         <member name="F:OzaLog.Core.LogFormatter.DefaultTimeFormat">
@@ -688,9 +808,35 @@
             <see cref="P:OzaLog.LogConfiguration.LogOptions.ShowThreadName"/> 設定
             </summary>
         </member>
-        <member name="M:OzaLog.Core.LogFormatter.EscapeMessage(System.String)">
+        <member name="M:OzaLog.Core.LogFormatter.EscapeMessage(System.String,System.Int32)">
             <summary>
-            處理訊息中的特殊字符 - 確保訊息中的 {} 在無格式參數時被跳脫
+            跳脫訊息中「不是合法格式化佔位符」的大括號,供 <c>string.Format</c> / <c>AppendFormat</c> 使用。
+            Escapes every brace that is not a valid format placeholder, for string.Format / AppendFormat.
+            </summary>
+            <param name="message">原始訊息(未跳脫)/ The raw message</param>
+            <param name="argCount">
+            格式化參數個數;索引 &gt;= 此值的 <c>{N}</c> 會被當成字面量跳脫,避免 FormatException。
+            Number of format arguments; a {N} whose index is out of range is escaped as a literal.
+            </param>
+            <returns>可安全交給 AppendFormat 的格式字串 / A format string safe for AppendFormat</returns>
+            <remarks>
+            v3.2 修正:舊版在呼叫端無條件把所有 <c>{}</c> 雙倍化,但無參數路徑走的是
+            <c>StringBuilder.Append</c>(不經 AppendFormat),雙倍化的括號沒人還原,
+            導致異常序列化的 JSON 在日誌裡變成 <c>{{ "Type": ... }}</c> 而無法被 parser 讀取。
+            現在跳脫只發生在 AppendFormat 路徑上,且逐字元判斷:
+            <c>{0}</c>、<c>{1,-8}</c>、<c>{2:F4}</c> 這類合法佔位符原樣保留,其餘一律跳脫。
+            </remarks>
+        </member>
+        <member name="M:OzaLog.Core.LogFormatter.TryMatchPlaceholder(System.String,System.Int32,System.Int32,System.Int32@)">
+            <summary>
+            判斷 <paramref name="start"/> 位置起是否為合法的格式化佔位符
+            <c>{index[,alignment][:format]}</c>,是則回傳結尾的 <c>}</c> 位置。
+            Determines whether a valid format item starts at the given position.
+            </summary>
+        </member>
+        <member name="M:OzaLog.Core.LogFormatter.IsAsciiDigit(System.Char)">
+            <summary>
+            只認 ASCII 0-9(不可用 char.IsDigit,會把其他語系數字也算進去)
             </summary>
         </member>
         <member name="M:OzaLog.Core.LogFormatter.AppendTimestamp(System.Text.StringBuilder,System.DateTime,System.String)">
@@ -846,7 +992,7 @@
             Synchronous-mode write - appends then flushes immediately so the content is readable right away.
             </summary>
             <remarks>
-            v3.1.1 修正：同步模式沒有 dispatcher、沒有 100ms 定期 flush timer、也沒有 ProcessExit 收尾
+            v3.2.0 修正：同步模式沒有 dispatcher、沒有 100ms 定期 flush timer、也沒有 ProcessExit 收尾
             （這三者都掛在 <c>AsyncLogHandler.Initialize</c>，同步模式從未觸發），
             因此若沿用 <see cref="M:OzaLog.Core.LogText.Write(OzaLog.Core.LogItem@)"/>，內容會一直留在 StreamWriter 緩衝裡，
             最後隨行程結束而全部消失（檔案建得出來但 0 bytes）。

@@ -19,16 +19,18 @@ namespace OzaLog
         private static void Log(LogLevel level, string name = "", string message = "", bool writeTxt = true, bool immediateFlush = false, string[] args = null)
         {
             // v3.0：呼叫端零格式化路徑。
-            // 只取得 ticks 與 threadId、跳脫 message 中 {} 後就建構 struct LogItem 入隊。
+            // 只取得 ticks 與 threadId 就建構 struct LogItem 入隊，
             // 真正的時間戳渲染、string.Format 都延遲到 dispatcher 執行緒。
-            var escapedMessage = LogFormatter.EscapeMessage(message);
+            // v3.2：大括號跳脫也移到 dispatcher（且只在有 args、真的要走 AppendFormat 時才做）。
+            // 舊版在這裡無條件把 {} 雙倍化，無 args 的路徑不經 AppendFormat 還原，
+            // 異常序列化的 JSON 因此以 {{ }} 落檔、下游 parser 讀不了。
             var hasArgs = args != null && args.Length > 0;
 
             var currentThread = Thread.CurrentThread;
             var item = new LogItem(
                 level: level,
                 name: name ?? string.Empty,
-                message: escapedMessage,
+                message: message ?? string.Empty,
                 args: hasArgs ? args : null,
                 timestampTicks: TimestampCache.GetCurrentTicks(),
                 threadId: currentThread.ManagedThreadId,

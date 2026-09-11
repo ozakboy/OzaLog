@@ -38,7 +38,7 @@ namespace OzaLog.Core
         /// Synchronous-mode write - appends then flushes immediately so the content is readable right away.
         /// </summary>
         /// <remarks>
-        /// v3.1.1 修正：同步模式沒有 dispatcher、沒有 100ms 定期 flush timer、也沒有 ProcessExit 收尾
+        /// v3.2.0 修正：同步模式沒有 dispatcher、沒有 100ms 定期 flush timer、也沒有 ProcessExit 收尾
         /// （這三者都掛在 <c>AsyncLogHandler.Initialize</c>，同步模式從未觸發），
         /// 因此若沿用 <see cref="Write(in LogItem)"/>，內容會一直留在 StreamWriter 緩衝裡，
         /// 最後隨行程結束而全部消失（檔案建得出來但 0 bytes）。

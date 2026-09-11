@@ -36,11 +36,52 @@ namespace OzaLog
             /// Log Retention Days - Defines how long log files are kept
             /// </summary>
             int KeepDays { get; }
+
+            /// <summary>
+            /// 單一日誌檔的大小上限(bytes),超過就自動切下一個 part 檔,預設 50MB。
+            /// 設得過小會讓同一天的日誌碎成大量 part 檔,增加開檔次數並拖慢寫入。
+            /// Max size of a single log file in bytes (default 50MB); exceeding it starts a new part file.
+            /// Setting it too small fragments a day into many part files and slows writing down.
+            /// </summary>
             long MaxFileSize { get; }
+
+            /// <summary>
+            /// 日誌根目錄,相對於 <c>AppDomain.CurrentDomain.BaseDirectory</c>(不是行程的目前目錄),
+            /// 預設 <c>"logs"</c>。實際路徑為 <c>{BaseDirectory}/{LogPath}/{yyyyMMdd}/{類型目錄}/</c>。
+            /// Log root directory, resolved against AppDomain.CurrentDomain.BaseDirectory (not the
+            /// current working directory); default "logs".
+            /// </summary>
             string LogPath { get; }
+
+            /// <summary>
+            /// 各日誌級別的子目錄設定(唯讀視圖)。未個別指定的級別一律落在
+            /// <see cref="ILogTypeDirectories.DirectoryPath"/>。
+            /// Per-level subdirectory settings (read-only view); levels left unset fall back to DirectoryPath.
+            /// </summary>
             ILogTypeDirectories TypeDirectories { get; }
+
+            /// <summary>
+            /// 是否啟用非同步寫入(預設 <c>true</c>)。<c>true</c> 時呼叫端只入隊,由 dispatcher 執行緒批次落檔;
+            /// <c>false</c> 時由呼叫端直接寫入並逐筆 flush(延遲較低但吞吐大幅下降),
+            /// 且同步模式沒有背景清理器,過期目錄需自行清理。
+            /// Whether asynchronous logging is enabled (default true). When false, entries are written and
+            /// flushed on the calling thread — lower latency, far lower throughput, and no background retention cleanup.
+            /// </summary>
             bool EnableAsyncLogging { get; }
+
+            /// <summary>
+            /// 是否同時把日誌輸出到主控台(預設 <c>true</c>)。輸出發生在呼叫端執行緒,
+            /// 高頻情境下 <c>Console.WriteLine</c> 會成為瓶頸,壓測與正式環境建議關閉。
+            /// Whether to also write to the console (default true). The write happens on the calling thread,
+            /// so Console.WriteLine becomes the bottleneck under high throughput — turn it off in production.
+            /// </summary>
             bool EnableConsoleOutput { get; }
+
+            /// <summary>
+            /// 非同步管線的批次 / 佇列 / 定時 flush 設定(唯讀視圖);
+            /// <see cref="EnableAsyncLogging"/> 為 <c>false</c> 時整組不生效。
+            /// Read-only view of the async pipeline settings; ignored when EnableAsyncLogging is false.
+            /// </summary>
             IAsyncLogOptions AsyncOptions { get; }
 
             /// <summary>
@@ -126,16 +167,77 @@ namespace OzaLog
             public IQuoteOptions QuoteOptions => new ReadOnlyQuoteOptions(_options.QuoteOptions);
         }
 
+        /// <summary>
+        /// 日誌類型目錄的唯讀視圖 - 對外揭露各級別實際使用的子目錄名稱。
+        /// Read-only view of the per-level log directories.
+        /// </summary>
+        /// <remarks>
+        /// 這些值都是「日期目錄底下的子目錄名稱」,不是完整路徑;
+        /// 完整路徑為 <c>{BaseDirectory}/{LogPath}/{yyyyMMdd}/{此處的目錄名}/</c>。
+        /// </remarks>
         public interface ILogTypeDirectories
         {
-           string  DirectoryPath { get; }
-           string TracePath { get; }
-           string DebugPath { get; }
-           string InfoPath { get; }
-           string WarnPath { get; }
-           string ErrorPath { get; }
-           string FatalPath { get; }
-           string CustomPath { get; }
+            /// <summary>
+            /// 所有級別的預設子目錄名稱(預設 <c>"LogFiles"</c>)。
+            /// 各級別未個別指定時一律落在這裡,亦即全部級別混在同一個目錄。
+            /// Default subdirectory for every level (default "LogFiles"); levels without an explicit
+            /// directory all land here.
+            /// </summary>
+            string DirectoryPath { get; }
+
+            /// <summary>
+            /// Trace 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="DirectoryPath"/>(預設未設定)。
+            /// Subdirectory for Trace; falls back to DirectoryPath when null (default: not set).
+            /// </summary>
+            string TracePath { get; }
+
+            /// <summary>
+            /// Debug 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="DirectoryPath"/>(預設未設定)。
+            /// Subdirectory for Debug; falls back to DirectoryPath when null (default: not set).
+            /// </summary>
+            string DebugPath { get; }
+
+            /// <summary>
+            /// Info 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="DirectoryPath"/>(預設未設定)。
+            /// Subdirectory for Info; falls back to DirectoryPath when null (default: not set).
+            /// </summary>
+            string InfoPath { get; }
+
+            /// <summary>
+            /// Warn 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="DirectoryPath"/>(預設未設定)。
+            /// Subdirectory for Warn; falls back to DirectoryPath when null (default: not set).
+            /// </summary>
+            string WarnPath { get; }
+
+            /// <summary>
+            /// Error 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="DirectoryPath"/>(預設未設定)。
+            /// 想把錯誤獨立出來給監控系統掃描時,設定這一項最直接。
+            /// Subdirectory for Error; falls back to DirectoryPath when null (default: not set).
+            /// </summary>
+            string ErrorPath { get; }
+
+            /// <summary>
+            /// Fatal 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="DirectoryPath"/>(預設未設定)。
+            /// Subdirectory for Fatal; falls back to DirectoryPath when null (default: not set).
+            /// </summary>
+            string FatalPath { get; }
+
+            /// <summary>
+            /// CustomName 級別的子目錄名稱;為 <c>null</c> 或未設定時退回 <see cref="DirectoryPath"/>(預設未設定)。
+            /// 每個 CustomName 各自一個檔案,全部放在這個目錄下。
+            /// Subdirectory for CustomName entries; falls back to DirectoryPath when null (default: not set).
+            /// </summary>
+            string CustomPath { get; }
+
+            /// <summary>
+            /// 取得指定級別實際要用的子目錄名稱(已套用退回 <see cref="DirectoryPath"/> 的規則)。
+            /// Resolves the subdirectory actually used by a level, with the DirectoryPath fallback applied.
+            /// </summary>
+            /// <param name="logLevel">日誌級別 / The log level</param>
+            /// <returns>
+            /// 該級別的子目錄名稱;未列舉到的級別一律比照 CustomName 處理。
+            /// The subdirectory for that level; unlisted levels are treated as CustomName.
+            /// </returns>
             string GetPathForType(LogLevel logLevel);
         }
 

@@ -10,15 +10,17 @@ Version numbers follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [3.1.1] - 2026-09-11
+## [3.2.0] - 2026-09-11
 
-> Two fixes that affect whether you can trust your logs: every `Error` / `Fatal` entry was written twice, and synchronous mode (`EnableAsyncLogging = false`) produced empty files. No API changes, no default value changes.
+> Three fixes, all of them changing **what actually lands in your log files**: every `Error` / `Fatal` entry was written twice, synchronous mode (`EnableAsyncLogging = false`) produced empty files, and curly braces in a message were doubled, leaving serialized exceptions as unparsable JSON. No public API signature changes and no default value changes, so this is not a major release — but because the log content changes it ships as a minor rather than a patch: patches tend to be applied by automated upgrade tooling, while a minor makes people glance at these notes first.
+>
+> **Check three things before upgrading:** (1) counting errors from your logs → the old numbers were inflated; (2) using synchronous mode → your old logs are empty; (3) parsing JSON out of your logs → braces are no longer doubled, adjust your parsing.
 
 ### Fixed
 
 **`Error` / `Fatal` / `immediateFlush` entries were written twice**
 - `AsyncLogHandler.Enqueue` enqueued the item (written later by the dispatcher) *and* wrote it synchronously on the caller thread to guarantee it reached disk before a crash — so the same log entry appeared as **two identical lines** in the file. This affected every `Error_Log` / `Fatal_Log` overload and any call at any level with `immediateFlush: true`; ordinary `Trace` / `Debug` / `Info` / `Warn` / `CustomName` calls were not affected.
-- **Note: if you have been counting errors from your logs, every number before 3.1.1 was double the real count.** Alert thresholds based on error rates need to be recalibrated.
+- **Note: if you have been counting errors from your logs, every number before 3.2.0 was inflated.** Not a clean 2x either — it fluctuated between 1x and 2x, because the queued copy could still be discarded by drop-oldest backpressure when the queue saturated, so the heavier the load the lower the actual duplication rate. Alert thresholds based on error rates need to be recalibrated.
 - These entries now take **only** the synchronous caller-thread write and are no longer enqueued. The immediate-flush performance characteristic is fully preserved (still `Flush(flushToDisk: true)` right after the write). Side benefit: auto-flush entries no longer pass through the queue, so drop-oldest backpressure can never discard them.
 
 **Synchronous mode (`EnableAsyncLogging = false`) produced 0-byte files**
@@ -26,13 +28,24 @@ Version numbers follow [Semantic Versioning](https://semver.org/).
 - **Note: if you have been using synchronous mode, your log files have been empty all along.**
 - Synchronous mode now flushes after every entry (at `StreamWriter` / `FileStream` level, no forced `fsync` — same behavior as the periodic flush in async mode), so the content is readable right away. Writes are still guarded by the `FileStreamPool` lock, so the path remains thread-safe. Synchronous and asynchronous mode produce byte-identical formatting for the same entry.
 - Queue-full backpressure has been drop-oldest since v3.0 (not a downgrade to synchronous writing), so that path was not affected by this bug.
+- `KeepDays` retention cleanup **still does not run in synchronous mode** (the cleaner is started by the async pipeline). Clean old date directories yourself for now, or use asynchronous mode; fixing it needs an extra background timer and is deferred to the next release.
+
+**Curly braces were doubled, leaving exception JSON unparsable**
+- Serialized exceptions landed in the file like this: `{{ "Type": "System.InvalidOperationException", "Data": {{}} }}` — every brace doubled, so **no parser could read it**, which blocked any structured analysis of your error logs.
+- Cause: `LOG.Log` unconditionally doubled every `{` and `}` in the message on the caller thread so that `AppendFormat` would not mistake them for format placeholders. But the no-arguments path appends the message with `StringBuilder.Append` and **never goes through `AppendFormat`**, so nothing ever undid the doubling. Exception and object overloads never carry arguments, so every single one was affected.
+- **Note: if you have been parsing JSON out of your logs, braces are no longer doubled** — adjust any parsing (or the regex / replace you wrote to work around it).
+- Braces in a message now reach the file **exactly as written**, with or without arguments. Text mode and JSON mode (`OutputFormat = Json`), synchronous and asynchronous mode all agree.
+- This also fixes mixing literal braces with placeholders: `LOG.Info_Log("cfg {\"retry\":3} user {0}", new[] { "alice" })` used to hit a `FormatException` and fall back to the raw message with `{0}` unsubstituted; it now correctly produces `cfg {"retry":3} user alice`.
 
 ### Technical
+- Brace escaping moved from the caller thread into the formatter, and now happens **only on the `AppendFormat` path** (when arguments are present). It scans character by character: valid format items (`{0}`, `{1,-8}`, `{2:F4}`) are preserved, everything else is escaped — including an index beyond the argument range such as `{5}`, which used to throw `FormatException` and is now emitted as a literal. Side benefit: the caller thread no longer pays for one `Regex.IsMatch` and two `string.Replace` calls per entry, which is closer to the v3.0 "zero formatting on the caller" design.
 - `FileStreamPool.Flush` gained a `flushToDisk` parameter (default `true`, existing callers unchanged); synchronous mode passes `false` to avoid an `fsync` per entry.
 - New internal method `LogText.WriteSync` (synchronous mode: write + flush); `LogText.Add_LogText` (v2.x compatibility entry point) now routes through it as well.
-- New xUnit tests: `DuplicateWriteTests` (Error / Fatal / `immediateFlush` written exactly once, other levels unchanged) and `SyncModeWriteTests` (sync write readable immediately, same line as the async dispatcher, no lost lines under concurrency). `AutoFlushLevelTests` (guards against `LogLevel.CustomName = 99` being treated as auto-flush) still passes.
+- **Removed the `Microsoft.SourceLink.GitHub` package reference.** SourceLink has shipped in the SDK since .NET 8; `PublishRepositoryUrl` + `EmbedUntrackedSources` alone produce an identical nuspec `<repository ... branch=... commit=... />`, and the PDBs of all five target frameworks (`netstandard2.0` / `netstandard2.1` included) carry full source-link mappings — the nuspec is byte-identical before and after removal. This also clears the NU1902 vulnerability advisory on its transitive `Microsoft.Build.Tasks.Git` dependency. Build-time change only; consumers are unaffected.
+- Added bilingual XML documentation for the remaining 16 public members of `LogConfiguration`. The library now builds with **0 warnings** on all five target frameworks.
+- New xUnit tests: `BraceEscapingTests` (brace behavior with and without arguments, both output formats, both write paths; exception JSON verified by **actually parsing it with `System.Text.Json`** rather than comparing strings), `DuplicateWriteTests` (Error / Fatal / `immediateFlush` written exactly once, other levels unchanged) and `SyncModeWriteTests` (sync write readable immediately, same line as the async dispatcher, no lost lines under concurrency). `AutoFlushLevelTests` (guards against `LogLevel.CustomName = 99` being treated as auto-flush) still passes — 73 tests green.
 - The `OzaLog.Test` smoke program gained a third CLI argument `write-mode` (`async` / `sync`, default `async`) so synchronous output can be inspected directly.
-- Build verified across all 5 TargetFrameworks (`netstandard2.0` / `netstandard2.1` / `net8.0` / `net9.0` / `net10.0`) with 0 errors.
+- Build verified across all 5 TargetFrameworks (`netstandard2.0` / `netstandard2.1` / `net8.0` / `net9.0` / `net10.0`) with 0 errors and 0 warnings.
 
 ---
 

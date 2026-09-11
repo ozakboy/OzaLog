@@ -1,7 +1,6 @@
 using System;
 using System.Globalization;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace OzaLog.Core
 {
@@ -9,6 +8,7 @@ namespace OzaLog.Core
     /// 日誌格式化處理器 - 將 LogItem 轉為要寫入檔案的單行字串。
     /// v3.0：格式化全部移到 dispatcher 執行緒，呼叫端不再做 string.Format / StringBuilder。
     /// v3.1：時間格式變為使用者可設定的 .NET DateTime 格式;支援 Thread ID/Name 顯示開關。
+    /// v3.2：大括號跳脫改為只在真的要走 <c>AppendFormat</c> 時才做,訊息裡的 <c>{}</c> 原樣落檔。
     /// </summary>
     internal static class LogFormatter
     {
@@ -40,16 +40,18 @@ namespace OzaLog.Core
             {
                 try
                 {
-                    sb.AppendFormat(CultureInfo.InvariantCulture, msg, args);
+                    // 只有真的要走 AppendFormat 時才跳脫大括號,且只跳脫「不是合法佔位符」的那些
+                    sb.AppendFormat(CultureInfo.InvariantCulture, EscapeMessage(msg, args.Length), args);
                 }
                 catch (FormatException)
                 {
-                    // 訊息含未配對的 {} → 退而求其次直接附加原字串
+                    // 保險退路:跳脫規則萬一漏判,至少原字串要進得了檔案
                     sb.Append(msg);
                 }
             }
             else
             {
+                // 無格式參數 → 不經過 AppendFormat,訊息原樣輸出(含其中的 {} )
                 sb.Append(msg);
             }
 
@@ -57,21 +59,109 @@ namespace OzaLog.Core
         }
 
         /// <summary>
-        /// 處理訊息中的特殊字符 - 確保訊息中的 {} 在無格式參數時被跳脫
+        /// 跳脫訊息中「不是合法格式化佔位符」的大括號,供 <c>string.Format</c> / <c>AppendFormat</c> 使用。
+        /// Escapes every brace that is not a valid format placeholder, for string.Format / AppendFormat.
         /// </summary>
-        public static string EscapeMessage(string message)
+        /// <param name="message">原始訊息(未跳脫)/ The raw message</param>
+        /// <param name="argCount">
+        /// 格式化參數個數;索引 &gt;= 此值的 <c>{N}</c> 會被當成字面量跳脫,避免 FormatException。
+        /// Number of format arguments; a {N} whose index is out of range is escaped as a literal.
+        /// </param>
+        /// <returns>可安全交給 AppendFormat 的格式字串 / A format string safe for AppendFormat</returns>
+        /// <remarks>
+        /// v3.2 修正:舊版在呼叫端無條件把所有 <c>{}</c> 雙倍化,但無參數路徑走的是
+        /// <c>StringBuilder.Append</c>(不經 AppendFormat),雙倍化的括號沒人還原,
+        /// 導致異常序列化的 JSON 在日誌裡變成 <c>{{ "Type": ... }}</c> 而無法被 parser 讀取。
+        /// 現在跳脫只發生在 AppendFormat 路徑上,且逐字元判斷:
+        /// <c>{0}</c>、<c>{1,-8}</c>、<c>{2:F4}</c> 這類合法佔位符原樣保留,其餘一律跳脫。
+        /// </remarks>
+        public static string EscapeMessage(string message, int argCount)
         {
             if (string.IsNullOrEmpty(message)) return message;
 
             if (message.IndexOf('{') < 0 && message.IndexOf('}') < 0)
                 return message;
 
-            // 含 {N} 數字 placeholder 視為已是格式字串，不跳脫
-            if (Regex.IsMatch(message, @"\{[0-9]+\}"))
-                return message;
+            var sb = new StringBuilder(message.Length + 8);
+            for (var i = 0; i < message.Length; i++)
+            {
+                var ch = message[i];
+                if (ch == '{')
+                {
+                    if (TryMatchPlaceholder(message, i, argCount, out var end))
+                    {
+                        // 合法佔位符(含對齊 / 格式區段)→ 原樣保留讓 AppendFormat 去代換
+                        sb.Append(message, i, end - i + 1);
+                        i = end;
+                    }
+                    else
+                    {
+                        sb.Append("{{");
+                    }
+                }
+                else if (ch == '}')
+                {
+                    sb.Append("}}");
+                }
+                else
+                {
+                    sb.Append(ch);
+                }
+            }
 
-            return message.Replace("{", "{{").Replace("}", "}}");
+            return sb.ToString();
         }
+
+        /// <summary>
+        /// 判斷 <paramref name="start"/> 位置起是否為合法的格式化佔位符
+        /// <c>{index[,alignment][:format]}</c>,是則回傳結尾的 <c>}</c> 位置。
+        /// Determines whether a valid format item starts at the given position.
+        /// </summary>
+        private static bool TryMatchPlaceholder(string s, int start, int argCount, out int end)
+        {
+            end = -1;
+            var i = start + 1;
+            if (i >= s.Length || !IsAsciiDigit(s[i])) return false;
+
+            // 索引區段
+            var index = 0;
+            while (i < s.Length && IsAsciiDigit(s[i]))
+            {
+                index = (index * 10) + (s[i] - '0');
+                if (index > 1000000) return false;   // 明顯不是佔位符,當字面量處理
+                i++;
+            }
+            // 索引超出 args 範圍 → 當字面量跳脫(舊行為是拋 FormatException 後整串原樣附加)
+            if (index >= argCount) return false;
+
+            // 對齊區段 ,[-]digits
+            if (i < s.Length && s[i] == ',')
+            {
+                i++;
+                if (i < s.Length && s[i] == '-') i++;
+                if (i >= s.Length || !IsAsciiDigit(s[i])) return false;
+                while (i < s.Length && IsAsciiDigit(s[i])) i++;
+            }
+
+            // 格式區段 :xxx(內容不得再含大括號)
+            if (i < s.Length && s[i] == ':')
+            {
+                i++;
+                while (i < s.Length && s[i] != '}' && s[i] != '{') i++;
+            }
+
+            if (i < s.Length && s[i] == '}')
+            {
+                end = i;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 只認 ASCII 0-9(不可用 char.IsDigit,會把其他語系數字也算進去)
+        /// </summary>
+        private static bool IsAsciiDigit(char c) => c >= '0' && c <= '9';
 
         /// <summary>
         /// 將 DateTime 依使用者設定的格式字串輸出。

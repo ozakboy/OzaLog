@@ -7,7 +7,7 @@ using Xunit;
 namespace OzaLog.Tests
 {
     /// <summary>
-    /// 防回歸（v3.1.1）：EnableAsyncLogging = false 的同步寫入路徑必須真的落檔。
+    /// 防回歸（v3.2.0）：EnableAsyncLogging = false 的同步寫入路徑必須真的落檔。
     /// </summary>
     /// <remarks>
     /// 為何不透過 LOG.Configure 切成同步模式測試：LogConfiguration.Initialize 不可重入（by design），

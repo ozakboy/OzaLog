@@ -62,7 +62,7 @@ This guarantees the queue never grows unbounded — OOM cannot happen from log s
 
 Because they bypass the queue entirely, these entries:
 
-- Are written exactly once (v3.1.0 both enqueued *and* wrote them synchronously, producing two identical lines per entry — fixed in v3.1.1)
+- Are written exactly once (v3.1.0 both enqueued *and* wrote them synchronously, producing two identical lines per entry — fixed in v3.2.0)
 - Are never subject to drop-oldest backpressure, so they cannot be discarded
 - Keep caller order within the same `(level, name)` file; ordering across files may drift slightly against asynchronous entries (the in-line timestamp is the source of truth)
 
@@ -74,7 +74,7 @@ Setting this to `false` starts none of the pipeline above: no queue, no dispatch
 
 - Writes are still guarded by the `FileStreamPool` lock → thread-safe
 - Output formatting is **identical** to asynchronous mode (same formatter)
-- In v3.1.0 nothing ever flushed this path, so the content stayed in the buffer and was lost (0-byte files) — fixed in v3.1.1
+- In v3.1.0 nothing ever flushed this path, so the content stayed in the buffer and was lost (0-byte files) — fixed in v3.2.0
 - Day rollover and size-based splitting work as usual, but **retention cleanup (`KeepDays`) does not run** — `LogRetentionCleaner` starts together with the asynchronous pipeline, so synchronous-mode hosts must prune old directories themselves
 
 ### 1.5 Disk flush timer

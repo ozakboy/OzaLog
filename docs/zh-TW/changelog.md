@@ -10,15 +10,17 @@ description: OzaLog 所有重要變更紀錄。
 
 ---
 
-## [3.1.1] - 2026-09-11
+## [3.2.0] - 2026-09-11
 
-> 兩個影響日誌可信度的修正:`Error` / `Fatal` 每筆重複寫入兩次,以及同步模式(`EnableAsyncLogging = false`)完全寫不出內容。無 API 變更、無預設值變更。
+> 三個修正,改的都是**實際落到日誌檔裡的內容**:`Error` / `Fatal` 每筆重複寫入、同步模式(`EnableAsyncLogging = false`)完全寫不出內容、訊息裡的大括號被加倍導致異常 JSON 無法解析。公開 API 簽章與預設配置值完全沒動,所以不是 Major;但因為日誌內容會變,發為 Minor 而非 Patch — Patch 常被自動升級工具直接套用,Minor 才會讓人在升級時多看一眼這份說明。
+>
+> **升級前先確認三件事**:① 有在數錯誤筆數 → 舊數字偏高;② 有在用同步模式 → 舊日誌是空的;③ 有在解析日誌裡的 JSON → 大括號不再加倍,解析邏輯要跟著調整。
 
 ### 問題修正
 
 **`Error` / `Fatal` / `immediateFlush` 每筆寫入兩次**
 - `AsyncLogHandler.Enqueue` 會先把項目放進佇列(dispatcher 稍後寫一次),再在呼叫端同步寫一次以確保 crash 前落盤 — 同一筆 log 因此在檔案裡出現**兩行完全相同的內容**。影響 `Error_Log`、`Fatal_Log` 的全部多載,以及任何級別帶 `immediateFlush: true` 的呼叫;`Trace` / `Debug` / `Info` / `Warn` / `CustomName` 的一般呼叫不受影響。
-- **請注意:如果你之前用日誌統計錯誤筆數,3.1.1 以前的數字是實際值的兩倍**;以錯誤率設定的告警閾值需要重新校正。
+- **請注意:如果你之前用日誌統計錯誤筆數,3.2.0 以前的數字偏高**。倍率不是穩定的兩倍,而是在 1~2 倍之間浮動 — 佇列裡的那份副本在飽和時可能被 drop-oldest 背壓丟掉,所以壓力越大、實際重複率越低。以錯誤率設定的告警閾值需要重新校正。
 - 修正後這些項目改為**只走呼叫端同步寫入、不再入隊**,立即落檔的效能特性完全保留(仍是寫入後立刻 `Flush(flushToDisk: true)`)。附帶效果:自動 flush 的項目不再經過佇列,不可能被 drop-oldest 背壓丟棄。
 
 **同步模式(`EnableAsyncLogging = false`)寫出 0 bytes 檔案**
@@ -26,14 +28,25 @@ description: OzaLog 所有重要變更紀錄。
 - **請注意:如果你之前用同步模式,你的日誌檔一直是空的。**
 - 修正後同步模式逐筆 flush(`StreamWriter` / `FileStream` 層級,不強制 `fsync`,與非同步模式的定期 flush 行為一致),寫完立刻讀得到;寫入仍由 `FileStreamPool` 的 lock 保護,維持線程安全。同步與非同步模式產生的內容格式完全相同。
 - 佇列滿時的背壓自 v3.0 起就是 drop-oldest(不是降級為同步寫),因此不受本 bug 影響。
+- 同步模式的 `KeepDays` 過期清理**仍未生效**(清理器掛在非同步管線上)。目前請自行清理舊的日期目錄,或改用非同步模式;這一項需要多開一個背景 Timer,留待下一版處理。
+
+**訊息裡的大括號被加倍,異常 JSON 無法解析**
+- 落檔的異常 JSON 長這樣:`{{ "Type": "System.InvalidOperationException", "Data": {{}} }}` — 所有大括號都變兩倍,**下游 parser 直接吃不下**,想拿 Error log 做結構化分析就會卡在這裡。
+- 成因:`LOG.Log` 在呼叫端無條件把訊息裡的 `{` `}` 雙倍化,目的是讓 `AppendFormat` 不要把它們當成格式化佔位符。但沒帶 `args` 的路徑走的是 `StringBuilder.Append`(**根本不經過 `AppendFormat`**),雙倍化的括號沒人還原,就這樣進了檔案。異常與物件多載都沒有 `args`,所以每一筆都中。
+- **請注意:如果你之前在解析日誌裡的 JSON,大括號不再是加倍的**,解析邏輯(或當初為此寫的 regex / 取代)要跟著調整。
+- 修正後訊息裡的大括號**原樣落檔**,不論有沒有帶 `args`。文字模式與 JSON 模式(`OutputFormat = Json`)、同步與非同步模式的輸出一致。
+- 順帶修好字面大括號與佔位符混用的情況:`LOG.Info_Log("cfg {\"retry\":3} user {0}", new[] { "alice" })` 以前會因 `FormatException` 退回原字串(`{0}` 沒被代換),現在會正確輸出 `cfg {"retry":3} user alice`。
 
 ### 技術改進
 
+- 大括號跳脫從呼叫端移到 formatter,且**只在真的要走 `AppendFormat` 時**(有 `args`)才做。逐字元判斷:`{0}`、`{1,-8}`、`{2:F4}` 這類合法格式項原樣保留,其餘一律跳脫 — 包含索引超出 `args` 範圍的 `{5}`(以前會拋 `FormatException`,現在當字面量輸出)。附帶效果:呼叫端少做一次 `Regex.IsMatch` 與兩次 `string.Replace`,更貼近 v3.0「呼叫端零格式化」的設計。
 - `FileStreamPool.Flush` 新增 `flushToDisk` 參數(預設 `true`,既有呼叫行為不變);同步模式以 `false` 呼叫,避免逐筆 `fsync`。
 - 新增內部方法 `LogText.WriteSync`(同步模式專用:寫入 + flush);`LogText.Add_LogText`(v2.x 相容入口)一併改走此路徑。
-- 新增 xUnit 測試:`DuplicateWriteTests`(Error / Fatal / `immediateFlush` 各只寫一次,其餘級別行為不變)、`SyncModeWriteTests`(同步寫入立即可讀、與非同步模式輸出同一行、多執行緒不掉行)。`AutoFlushLevelTests`(防 `CustomName = 99` 誤中自動 flush)維持通過。
+- **移除 `Microsoft.SourceLink.GitHub` 套件參照**。.NET 8 起 SourceLink 已內建於 SDK,只靠 `PublishRepositoryUrl` + `EmbedUntrackedSources` 就能產生完全相同的 nuspec `<repository ... branch=... commit=... />`,五個 TFM(含 `netstandard2.0` / `netstandard2.1`)的 PDB 也都帶有完整的 source link 對應 — 移除前後的 nuspec 逐字元相同。此舉同時清掉其傳遞相依 `Microsoft.Build.Tasks.Git` 的弱點公告(NU1902)。建置期變更,消費者不受影響。
+- 補齊 `LogConfiguration` 剩餘 16 個公開成員的 XML 文件註解(中英雙語)。函式庫現在在五個 TFM 上都是**零警告**建置。
+- 新增 xUnit 測試:`BraceEscapingTests`(無 `args` / 有 `args` 的大括號行為、文字與 JSON 兩種輸出格式、同步與非同步兩條路徑;異常 JSON 以 `System.Text.Json` **實際 parse** 驗證,而非比對字串)、`DuplicateWriteTests`(Error / Fatal / `immediateFlush` 各只寫一次,其餘級別行為不變)、`SyncModeWriteTests`(同步寫入立即可讀、與非同步模式輸出同一行、多執行緒不掉行)。`AutoFlushLevelTests`(防 `CustomName = 99` 誤中自動 flush)維持通過,共 73 個測試全綠。
 - `OzaLog.Test` smoke 程式新增第三個 CLI 引數 `write-mode`(`async` / `sync`,預設 `async`),可實測同步模式輸出。
-- 跨 5 個 TargetFrameworks(`netstandard2.0` / `netstandard2.1` / `net8.0` / `net9.0` / `net10.0`)的建置驗證:0 錯誤。
+- 跨 5 個 TargetFrameworks(`netstandard2.0` / `netstandard2.1` / `net8.0` / `net9.0` / `net10.0`)的建置驗證:0 錯誤、0 警告。
 
 ---
 

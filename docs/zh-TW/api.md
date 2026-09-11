@@ -48,7 +48,7 @@ LOG.Info_Log<T>(string message, T obj, bool writeTxt = true, bool immediateFlush
 
 `Error_Log` 與 `Fatal_Log` **永遠**會觸發同步 immediate flush,不管使用者傳入的 `immediateFlush` 參數。這是確保程式 crash 前 log 已落盤的關鍵機制。其他級別則尊重 `immediateFlush` 參數(預設 `false`)。
 
-走這條路徑的項目**不入隊**,由呼叫端執行緒寫入,因此每筆只會出現一行,也不會被佇列滿時的 drop-oldest 丟棄。(v3.1.0 會同時入隊與同步寫入,導致每筆重複兩行 — v3.1.1 已修正。)
+走這條路徑的項目**不入隊**,由呼叫端執行緒寫入,因此每筆只會出現一行,也不會被佇列滿時的 drop-oldest 丟棄。(v3.1.0 會同時入隊與同步寫入,導致每筆重複兩行 — v3.2.0 已修正。)
 
 #### 物件多載的行為
 
@@ -319,6 +319,20 @@ class SerializableExceptionInfo
 ```
 
 結果以 JSON 序列化寫入 log 行(或在 Json 輸出模式下放進 `data` 欄位)。
+
+v3.2.0 起序列化後的 JSON **原樣落檔**,可直接餵給 parser:
+
+```text
+09:07:05.123[T:12]
+{
+  "Type": "System.InvalidOperationException",
+  "Message": "order book is empty",
+  "Data": {},
+  "AdditionalProperties": { "HResult": "-2146233079" }
+}
+```
+
+v3.1.0 以前所有大括號都會被加倍(`{{ "Type": ... "Data": {{}} }}`),導致內容無法解析。若你當初為此寫了解析邏輯,升級時要跟著調整。
 
 ---
 

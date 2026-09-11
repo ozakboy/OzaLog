@@ -32,7 +32,7 @@ var mainFormat = args.Length >= 1 ? ParseLogFormat(args[0]) : LogOutputFormat.Tx
 var quoteFormat = args.Length >= 2 ? ParseQuoteFormat(args[1]) : QuoteOutputFormat.Json;
 var asyncLogging = args.Length < 3 || ParseWriteMode(args[2]);
 
-Header("OzaLog v3.1.1 console smoke test");
+Header("OzaLog v3.2.0 console smoke test");
 Console.WriteLine($"  PID:           {Environment.ProcessId}");
 Console.WriteLine($"  BaseDir:       {AppContext.BaseDirectory}");
 Console.WriteLine($"  Runtime:       {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");

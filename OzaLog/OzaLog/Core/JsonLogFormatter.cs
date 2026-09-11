@@ -83,7 +83,9 @@ namespace OzaLog.Core
 
             try
             {
-                return string.Format(CultureInfo.InvariantCulture, message, args);
+                // 與 LogFormatter 同一套規則:只跳脫「不是合法佔位符」的大括號
+                return string.Format(CultureInfo.InvariantCulture,
+                    LogFormatter.EscapeMessage(message, args.Length), args);
             }
             catch (FormatException)
             {
@@ -96,9 +98,8 @@ namespace OzaLog.Core
         /// 把 \n 之後的 JSON 部分提取出來,當作 data 欄位寫入。失敗則不寫 data。
         /// </summary>
         /// <remarks>
-        /// 注意:呼叫端會先走 LogFormatter.EscapeMessage,該方法會把 <c>{</c>/<c>}</c> 雙倍化(<c>{{</c>/<c>}}</c>)。
-        /// 因此 JSON 部分實際長相是 <c>{{"foo":"bar"}}</c>,需先反跳脫才能 parse。
-        /// 先嘗試 raw parse(萬一有人直接傳合法 JSON 字串進 message),失敗再嘗試反跳脫。
+        /// v3.2 起呼叫端不再把 <c>{</c>/<c>}</c> 雙倍化,message 裡的 JSON 就是原樣的合法 JSON,
+        /// 直接 parse 即可(舊版必須先反跳脫 <c>{{</c>/<c>}}</c>,該退路已隨跳脫時機修正而移除)。
         /// </remarks>
         private static void TryWriteDataFromMessage(Utf8JsonWriter writer, string fullMsg)
         {
@@ -111,19 +112,11 @@ namespace OzaLog.Core
             var jsonPart = fullMsg.Substring(nlIdx + 1).TrimStart();
             if (jsonPart.Length == 0) return;
 
-            // 快速判斷:首字必為 { 或 [ 或 {{ 或 [[
+            // 快速判斷:首字必為 { 或 [
             var firstCh = jsonPart[0];
             if (firstCh != '{' && firstCh != '[') return;
 
-            if (TryParseAndWrite(writer, jsonPart)) return;
-
-            // 嘗試反跳脫 EscapeMessage 雙倍化的 {} 後再 parse
-            if (jsonPart.IndexOf("{{", StringComparison.Ordinal) >= 0 ||
-                jsonPart.IndexOf("}}", StringComparison.Ordinal) >= 0)
-            {
-                var unescaped = jsonPart.Replace("{{", "{").Replace("}}", "}");
-                TryParseAndWrite(writer, unescaped);
-            }
+            TryParseAndWrite(writer, jsonPart);
         }
 
         private static bool TryParseAndWrite(Utf8JsonWriter writer, string json)

@@ -48,7 +48,7 @@ LOG.Info_Log<T>(string message, T obj, bool writeTxt = true, bool immediateFlush
 
 `Error_Log` and `Fatal_Log` **always** trigger synchronous immediate flush regardless of the `immediateFlush` argument. This ensures crash logs reach disk before the process dies. Other levels respect the `immediateFlush` argument (default `false`).
 
-Entries taking this path are **not enqueued** — the caller thread writes them, so each produces exactly one line and none can be discarded by drop-oldest backpressure when the queue is full. (v3.1.0 both enqueued and wrote them synchronously, duplicating every such entry — fixed in v3.1.1.)
+Entries taking this path are **not enqueued** — the caller thread writes them, so each produces exactly one line and none can be discarded by drop-oldest backpressure when the queue is full. (v3.1.0 both enqueued and wrote them synchronously, duplicating every such entry — fixed in v3.2.0.)
 
 #### Object overload behavior
 
@@ -319,6 +319,20 @@ class SerializableExceptionInfo
 ```
 
 The result is JSON-serialized into the log line (or the `data` field in Json output mode).
+
+Since v3.2.0 the serialized JSON reaches the file **exactly as produced**, so it can be handed straight to a parser:
+
+```text
+09:07:05.123[T:12]
+{
+  "Type": "System.InvalidOperationException",
+  "Message": "order book is empty",
+  "Data": {},
+  "AdditionalProperties": { "HResult": "-2146233079" }
+}
+```
+
+Up to v3.1.0 every brace was doubled (`{{ "Type": ... "Data": {{}} }}`), which made the payload unparsable. If you built parsing around the doubled form, adjust it when upgrading.
 
 ---
 
