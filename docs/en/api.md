@@ -77,6 +77,8 @@ public static void Configure(Action<LogConfiguration.LogOptions> configure);
 
 **Not re-entrant.** Second call throws `InvalidOperationException("OzaLog 已初始化（Configure 不可重入）")`. If `Configure` is never called, the first log write auto-initializes with default settings.
 
+> Since v3.3.0 there is one exception: after `LOG.Shutdown()` (§1.5) the pipeline is no longer running, so `Configure` is permitted again and restarts it — with the options **reset to their defaults**, not the ones from the previous round.
+
 ### 1.4 `LOG.GetCurrentOptions()` — read-only config view
 
 ```csharp
@@ -84,6 +86,45 @@ public static LogConfiguration.ILogOptions GetCurrentOptions();
 ```
 
 Returns a read-only wrapper around the live `LogOptions`. Useful for diagnostics and verifying the active configuration.
+
+### 1.5 Lifecycle — `Flush` / `Shutdown` (v3.3+)
+
+```csharp
+public static bool IsShutdown { get; }
+
+public static bool Flush();
+public static bool Flush(int timeoutMs);
+public static Task<bool> FlushAsync(CancellationToken cancellationToken = default);
+public static Task<bool> FlushAsync(int timeoutMs, CancellationToken cancellationToken = default);
+
+public static bool Shutdown();
+public static bool Shutdown(int timeoutMs);
+public static Task<bool> ShutdownAsync(CancellationToken cancellationToken = default);
+public static Task<bool> ShutdownAsync(int timeoutMs, CancellationToken cancellationToken = default);
+```
+
+| Member | Returns | Meaning |
+| --- | --- | --- |
+| `Flush` / `FlushAsync` | `true` | Both pipelines drained and the files were flushed to disk (`fsync`) |
+| | `false` | Timed out (default 10 s), cancelled, or the logger is already shut down — the already-written part is still flushed |
+| `Shutdown` / `ShutdownAsync` | `true` | This call performed the shutdown |
+| | `false` | Already shut down — idempotent, not an error |
+| `IsShutdown` | `bool` | Whether logging calls are currently being discarded |
+
+**`Flush` is an exact barrier.** The calling thread helps drain the queue instead of waiting out the dispatcher's `FlushIntervalMs`, so 1000 entries written before the call are 1000 lines in the file when it returns. Both the main logger and the Quote pipeline are covered.
+
+**`Shutdown` stops the background work**: it flushes, then stops the dispatcher, the periodic disk-flush timer and the retention-cleanup timer, and closes every open log file. Afterwards **every logging call is silently discarded** — no exception, no console output — and `Configure` becomes callable again, which restarts the pipeline with the **default** options (see §1.3). Interleaving with the built-in `ProcessExit` / `UnhandledException` cleanup is safe in either order.
+
+**None of these methods throw**, on any path — including a cancelled `CancellationToken`, which returns `false` rather than raising `OperationCanceledException`. The `Task`-returning overloads are available on every target framework, `netstandard2.0` included.
+
+```csharp
+LOG.Info_Log("about to snapshot");
+LOG.Flush();                         // the line above is on disk now
+
+// at the end of the process
+await LOG.ShutdownAsync();
+LOG.Info_Log("ignored, no exception");
+```
 
 ---
 
@@ -341,3 +382,4 @@ Up to v3.1.0 every brace was doubled (`{{ "Type": ... "Data": {{}} }}`), which m
 - v3.1 additions are **strictly additive** — no public API was removed or renamed.
 - All new options on `LogOptions` and the new `QuoteOptions` default to v3.0 behavior — existing code continues to work unchanged.
 - The new `ILogOptions` interface members (`OutputFormat`, `TimeFormat`, `ShowThreadId`, `ShowThreadName`, `HighPrecisionTimestamp`, `QuoteOptions`) are **read-only**; library consumers normally only read `LOG.GetCurrentOptions()`, so this is not a breaking change for typical use.
+- v3.3 additions (`Flush`, `FlushAsync`, `Shutdown`, `ShutdownAsync`, `IsShutdown`) are **strictly additive** as well — no existing signature changed and no default value changed. The one behavioral change is that `Configure` is now permitted after `Shutdown`; it still throws on a second call while the pipeline is alive.

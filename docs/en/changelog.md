@@ -10,6 +10,52 @@ Version numbers follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [3.3.0] - 2026-09-14
+
+> Host-facing lifecycle control: `LOG.Flush()` / `LOG.Shutdown()` and their async counterparts, plus log files you can actually open while the process is running. Everything here is **additive** — no existing signature changed, no default value changed — so upgrading from 3.2.0 needs no code changes.
+>
+> The reason this matters: logging is asynchronous, so until now there was no way to ask "is what I wrote actually on disk?" other than sleeping and hoping. Hosts that are about to be killed (container stop, crash handler, an app-wide `finally`) had no barrier to wait on, and anything that shut the logger down had no way to stop the background worker.
+
+### Added
+
+**`LOG.Flush()` — a real barrier, not a sleep**
+- `LOG.Flush()` / `LOG.Flush(int timeoutMs)` blocks until every entry written so far has reached the disk, then returns `true`. Returns `false` on timeout (default 10 s) or when the logger is already shut down.
+- The calling thread **helps drain the queue** rather than waiting out the dispatcher's `FlushIntervalMs`, so the guarantee is exact: write 1000 entries, call `Flush()`, and the file has 1000 lines by the time it returns — no sleep, no re-read, no retry loop.
+- `LOG.FlushAsync(CancellationToken)` / `LOG.FlushAsync(int timeoutMs, CancellationToken)` return `Task<bool>` on **every** target framework, `netstandard2.0` included. A cancelled token returns `false` rather than throwing `OperationCanceledException`.
+- Both pipelines (main logger and Quote) are flushed, and both force an `fsync` — the reason a host calls `Flush` is that the process may be killed next, so handing the buffer to the OS is not enough.
+
+**`LOG.Shutdown()` — stop the background work**
+- `LOG.Shutdown()` / `LOG.Shutdown(int timeoutMs)` / `LOG.ShutdownAsync(...)`: flush, then stop the dispatcher, the periodic disk-flush timer and the retention-cleanup timer, then close every open log file.
+- **Idempotent.** The first call returns `true`, later calls return `false` — that is a report, not an error. It also interleaves safely with the built-in `ProcessExit` / `UnhandledException` cleanup in either order, so a host that calls `Shutdown()` explicitly and then exits normally does not double-run the cleanup or trip over half-closed streams.
+- **Writes after `Shutdown` are silently discarded** — no exception, not even a console line. A background-logging library must not take its host down on the way out, and a host that is already shutting down should not have to guard every log statement. `LOG.IsShutdown` reports the current state.
+
+**`Configure` after `Shutdown`**
+- `LOG.Configure(...)` remains non-reentrant while the pipeline is alive (unchanged v3.0 behavior — it exists so nobody swaps settings mid-run), but it is now **allowed again after `Shutdown`**: it restarts the pipeline and clears the discard state. That restriction only ever made sense while something was running.
+- The options are **reset to defaults** on restart, so the previous round's settings cannot linger as invisible state that nobody configured and nobody can see.
+
+### Fixed
+
+**Log files could not be opened by external tools while running**
+- Files were opened with `FileShare.Read`, which only admits readers that open the file **read-only**. `tail`, editors and most log viewers open with `FileAccess.ReadWrite` and were rejected with a sharing violation — in practice, *you could not watch the log while the process was running*, which is most of the point of a local file logger.
+- Files are now opened with `FileShare.ReadWrite` (both the main logger and the Quote pipeline). The writer keeps its append-only handle; this only widens what other processes are permitted to do with the file.
+
+### Technical
+
+- **Removed the `DocumentationFile` property from the project file.** It pinned all five target frameworks to a single `file.xml` in the project directory (five builds racing to write the same file) and shipped the docs as `lib/<tfm>/file.xml` — a name IntelliSense ignores, since it only looks for `<AssemblyName>.xml`. **The bilingual XML documentation was invisible to consumers all along.** With only `GenerateDocumentationFile` left, each framework generates its own `OzaLog.xml` and the package now carries `lib/<tfm>/OzaLog.xml`, which IntelliSense picks up. The stale `file.xml` checked into the repository has been removed.
+- Both pipelines now track outstanding entries with a **pending counter** instead of inferring completion from an empty queue. An empty queue does not mean the work is done — the dispatcher may have dequeued an item that has not reached the file yet — and a `Flush` that trusted the queue would return one entry early. The counter is incremented *before* the enqueue for the same reason.
+- The dispatcher's semaphore and `CancellationTokenSource` are rebuilt on each `Initialize`, so the pipeline can genuinely restart after `Shutdown`; the `ProcessExit` / `UnhandledException` handlers are registered **once per process**, so a restart does not stack up duplicate cleanup handlers.
+- `FileStreamPool.FlushAll` and `QuoteFileStreamPool.FlushAll` gained a `flushToDisk` overload (the no-argument version keeps its existing behavior). The periodic timer still passes `false` — hand the buffer to the OS, throughput first; `Flush` / `Shutdown` pass `true` and force the `fsync`.
+- New internal coordinator `LogLifecycle` — the single place that owns the shutdown flag and sequences both pipelines, so `LOG` itself stays a thin facade.
+- New xUnit tests: `LifecycleTests` (a 1000-entry burst is exactly 1000 lines when `Flush` returns; writes after `Shutdown` throw nothing and leave no trace in any file; `Shutdown` is idempotent and survives the `ProcessExit` cleanup running afterwards; `Configure` stays non-reentrant until `Shutdown`; logging resumes after a restart) and `FileShareTests` (the file is readable *and* read-write openable while the writer holds it, and the writer keeps working afterwards). Cross-class test parallelization is disabled at assembly level, because shutting the pipeline down is process-global state and would otherwise cut other test classes off mid-write. **81 tests green** (73 in 3.2.0).
+- Zero NuGet dependencies on `net8.0` / `net9.0` / `net10.0` unchanged; build verified across all five target frameworks with 0 errors and 0 warnings.
+
+### Known limitations
+
+- **Entries written within the same millisecond are not guaranteed to land in file order.** The timestamp cache has 1 ms resolution and the queue is drained in batches. Use `HighPrecisionTimestamp = true` if you need to reorder entries after the fact. Not planned to change: the 1 ms cache is what keeps the caller-side cost at a few nanoseconds.
+- **Synchronous mode (`EnableAsyncLogging = false`) still has no retention cleanup** — `KeepDays` is enforced by a background cleaner that only the async pipeline starts. Carried over from 3.2.0.
+
+---
+
 ## [3.2.0] - 2026-09-11
 
 > Three fixes, all of them changing **what actually lands in your log files**: every `Error` / `Fatal` entry was written twice, synchronous mode (`EnableAsyncLogging = false`) produced empty files, and curly braces in a message were doubled, leaving serialized exceptions as unparsable JSON. No public API signature changes and no default value changes, so this is not a major release — but because the log content changes it ships as a minor rather than a patch: patches tend to be applied by automated upgrade tooling, while a minor makes people glance at these notes first.

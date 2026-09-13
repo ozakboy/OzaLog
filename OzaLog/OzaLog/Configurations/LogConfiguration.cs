@@ -14,7 +14,11 @@ namespace OzaLog
         /// 儲存當前的日誌配置選項
         /// Stores the current logging configuration options
         /// </summary>
-        private static readonly LogOptions _currentOptions = new LogOptions();
+        /// <remarks>
+        /// v3.3.0 起不再是 readonly：<c>LOG.Shutdown()</c> 之後允許再次 <c>Configure</c>，
+        /// 屆時整組選項換成全新的預設值，避免上一輪的設定殘留成看不見的隱藏狀態。
+        /// </remarks>
+        private static LogOptions _currentOptions = new LogOptions();
         /// <summary>
         /// 標記日誌系統是否已經初始化
         /// Flag indicating whether the logging system has been initialized
@@ -586,11 +590,31 @@ namespace OzaLog
             configure?.Invoke(_currentOptions);
             _isInitialized = true;
 
+            // v3.3.0：Shutdown 之後再次 Configure 視為「重新開張」，解除靜默丟棄狀態，
+            // 下一筆日誌會重新啟動背景管線。首次 Configure 時本呼叫沒有副作用。
+            Core.LogLifecycle.Resume();
+
             // v3.0：啟用全域意外攔截（如果使用者明確 opt-in）
             if (_currentOptions.EnableGlobalExceptionCapture)
             {
                 Core.GlobalExceptionCapture.Enable();
             }
+        }
+
+        /// <summary>
+        /// v3.3.0：<c>LOG.Shutdown()</c> 收尾後把配置還原成未初始化狀態，
+        /// 讓宿主（與測試）可以再次呼叫 <c>Configure</c>。
+        /// Resets the configuration to its uninitialized state after LOG.Shutdown(),
+        /// so Configure can be called again.
+        /// </summary>
+        /// <remarks>
+        /// <c>Configure</c> 的不可重入是 by design（避免執行中途被改設定），
+        /// 但那個限制的前提是「管線還活著」；收尾之後限制就沒有意義了。
+        /// </remarks>
+        internal static void ResetForRestart()
+        {
+            _currentOptions = new LogOptions();
+            _isInitialized = false;
         }
 
         /// <summary>

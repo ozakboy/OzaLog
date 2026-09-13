@@ -83,7 +83,7 @@ LOG.Configure(o =>
 });
 ```
 
-**`Configure` is not re-entrant** — call it exactly once at startup. See [Configuration](./configuration.md) for the full option list.
+**`Configure` is not re-entrant** — call it exactly once at startup (v3.3.0 adds one exception: it is allowed again after `LOG.Shutdown()`). See [Configuration](./configuration.md) for the full option list.
 
 ---
 

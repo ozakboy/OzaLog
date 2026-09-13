@@ -83,7 +83,7 @@ LOG.Configure(o =>
 });
 ```
 
-**`Configure` 不可重入** — 啟動時只能呼叫一次。完整選項列表見 [配置選項](./configuration.md)。
+**`Configure` 不可重入** — 啟動時只能呼叫一次(v3.3.0 起多一個例外:`LOG.Shutdown()` 之後允許再呼叫)。完整選項列表見 [配置選項](./configuration.md)。
 
 ---
 

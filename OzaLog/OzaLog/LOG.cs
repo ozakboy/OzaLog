@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Collections.Generic;
@@ -24,6 +25,10 @@ namespace OzaLog
             // v3.2：大括號跳脫也移到 dispatcher（且只在有 args、真的要走 AppendFormat 時才做）。
             // 舊版在這裡無條件把 {} 雙倍化，無 args 的路徑不經 AppendFormat 還原，
             // 異常序列化的 JSON 因此以 {{ }} 落檔、下游 parser 讀不了。
+            // v3.3：LOG.Shutdown() 之後一律靜默丟棄（連 Console 輸出也不做）。
+            // 背景服務型套件不能因為自己已經收尾就把宿主弄掛，所以這裡是 return 不是 throw。
+            if (LogLifecycle.IsShutdown) return;
+
             var hasArgs = args != null && args.Length > 0;
 
             var currentThread = Thread.CurrentThread;
@@ -317,6 +322,98 @@ namespace OzaLog
         {
             return LogConfiguration.GetCurrentOptions();
         }
+
+        #endregion
+
+        #region 生命週期 - Flush / Shutdown（v3.3.0）
+
+        /// <summary>
+        /// 是否已呼叫過 <see cref="Shutdown()"/>。為 <c>true</c> 時所有寫入方法一律靜默丟棄（不擲例外）；
+        /// 再次呼叫 <see cref="Configure(Action{LogConfiguration.LogOptions})"/> 會解除此狀態並重新啟動管線。
+        /// Whether <see cref="Shutdown()"/> has been called. While true every logging call is silently
+        /// discarded (never throws); calling Configure again clears it and restarts the pipeline.
+        /// </summary>
+        public static bool IsShutdown => LogLifecycle.IsShutdown;
+
+        /// <summary>
+        /// 同步等待「已寫出的每一筆日誌都落到磁碟」，逾時上限 10 秒。
+        /// 適用於宿主收尾、快照前、或任何「接下來可能被強制終止」的時點。
+        /// Synchronously waits until every entry written so far has reached the disk (10 s timeout).
+        /// </summary>
+        /// <returns>
+        /// <c>true</c> 表示佇列已排空且檔案已 flush 到磁碟；
+        /// <c>false</c> 表示逾時、或已經 <see cref="Shutdown()"/>（此時仍會盡力 flush 已寫入的部分）。
+        /// True when the queue drained and files were flushed to disk; false on timeout or after Shutdown.
+        /// </returns>
+        /// <remarks>呼叫端執行緒會一起幫忙排空佇列，不是乾等 dispatcher 的週期；本方法不擲例外。</remarks>
+        public static bool Flush() => LogLifecycle.Flush(LogLifecycle.DefaultTimeoutMs);
+
+        /// <summary>
+        /// 同步等待日誌落到磁碟，自訂逾時上限。
+        /// Synchronously flushes to disk with a custom timeout.
+        /// </summary>
+        /// <param name="timeoutMs">等待上限（毫秒）/ Timeout in milliseconds</param>
+        /// <returns>同 <see cref="Flush()"/> / Same as <see cref="Flush()"/></returns>
+        public static bool Flush(int timeoutMs) => LogLifecycle.Flush(timeoutMs);
+
+        /// <summary>
+        /// <see cref="Flush()"/> 的非同步版本，逾時上限 10 秒。
+        /// Asynchronous counterpart of <see cref="Flush()"/> with a 10 s timeout.
+        /// </summary>
+        /// <param name="cancellationToken">取消權杖；取消時回傳 <c>false</c>，不擲 <see cref="OperationCanceledException"/></param>
+        /// <returns>同 <see cref="Flush()"/> / Same as <see cref="Flush()"/></returns>
+        public static Task<bool> FlushAsync(CancellationToken cancellationToken = default)
+            => LogLifecycle.FlushAsync(LogLifecycle.DefaultTimeoutMs, cancellationToken);
+
+        /// <summary>
+        /// <see cref="Flush(int)"/> 的非同步版本。
+        /// Asynchronous counterpart of <see cref="Flush(int)"/>.
+        /// </summary>
+        /// <param name="timeoutMs">等待上限（毫秒）/ Timeout in milliseconds</param>
+        /// <param name="cancellationToken">取消權杖；取消時回傳 <c>false</c>，不擲例外</param>
+        /// <returns>同 <see cref="Flush()"/> / Same as <see cref="Flush()"/></returns>
+        public static Task<bool> FlushAsync(int timeoutMs, CancellationToken cancellationToken = default)
+            => LogLifecycle.FlushAsync(timeoutMs, cancellationToken);
+
+        /// <summary>
+        /// 收尾：先把佇列排空並落盤，再停掉 dispatcher、定期 flush 計時器與過期清理計時器，最後關閉所有日誌檔。
+        /// 之後的寫入一律靜默丟棄（不擲例外）；要恢復請再次呼叫
+        /// <see cref="Configure(Action{LogConfiguration.LogOptions})"/>（此時配置回到預設值）。
+        /// Shuts the logger down: drains and flushes, stops all background work, closes every file.
+        /// Subsequent logging calls are silently discarded; call Configure again to restart.
+        /// </summary>
+        /// <returns>
+        /// <c>true</c> 表示本次呼叫真的執行了收尾；<c>false</c> 表示先前已收尾過（冪等，不是錯誤）。
+        /// True when this call performed the shutdown; false when it had already been shut down (idempotent).
+        /// </returns>
+        public static bool Shutdown() => LogLifecycle.Shutdown(LogLifecycle.DefaultTimeoutMs);
+
+        /// <summary>
+        /// 收尾，自訂排空階段的逾時上限。
+        /// Shuts the logger down with a custom drain timeout.
+        /// </summary>
+        /// <param name="timeoutMs">排空階段的等待上限（毫秒）/ Drain timeout in milliseconds</param>
+        /// <returns>同 <see cref="Shutdown()"/> / Same as <see cref="Shutdown()"/></returns>
+        public static bool Shutdown(int timeoutMs) => LogLifecycle.Shutdown(timeoutMs);
+
+        /// <summary>
+        /// <see cref="Shutdown()"/> 的非同步版本，逾時上限 10 秒。
+        /// Asynchronous counterpart of <see cref="Shutdown()"/> with a 10 s timeout.
+        /// </summary>
+        /// <param name="cancellationToken">取消權杖；取消只會縮短排空等待，收尾仍會完成，且不擲例外</param>
+        /// <returns>同 <see cref="Shutdown()"/> / Same as <see cref="Shutdown()"/></returns>
+        public static Task<bool> ShutdownAsync(CancellationToken cancellationToken = default)
+            => LogLifecycle.ShutdownAsync(LogLifecycle.DefaultTimeoutMs, cancellationToken);
+
+        /// <summary>
+        /// <see cref="Shutdown(int)"/> 的非同步版本。
+        /// Asynchronous counterpart of <see cref="Shutdown(int)"/>.
+        /// </summary>
+        /// <param name="timeoutMs">排空階段的等待上限（毫秒）/ Drain timeout in milliseconds</param>
+        /// <param name="cancellationToken">取消權杖；取消只會縮短排空等待，收尾仍會完成，且不擲例外</param>
+        /// <returns>同 <see cref="Shutdown()"/> / Same as <see cref="Shutdown()"/></returns>
+        public static Task<bool> ShutdownAsync(int timeoutMs, CancellationToken cancellationToken = default)
+            => LogLifecycle.ShutdownAsync(timeoutMs, cancellationToken);
 
         #endregion
 

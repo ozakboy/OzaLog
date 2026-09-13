@@ -85,11 +85,25 @@ namespace OzaLog.Core
         /// </summary>
         public static void FlushAll()
         {
+            FlushAll(flushToDisk: false);
+        }
+
+        /// <summary>
+        /// flush 全部開啟的 stream。
+        /// </summary>
+        /// <param name="flushToDisk">是否強制 fsync(v3.3.0 的 LOG.Flush / LOG.Shutdown 傳 true)</param>
+        public static void FlushAll(bool flushToDisk)
+        {
             lock (_gate)
             {
                 foreach (var node in _index.Values)
                 {
-                    try { node.Value.Writer?.Flush(); }
+                    try
+                    {
+                        node.Value.Writer?.Flush();
+                        if (flushToDisk)
+                            node.Value.Stream?.Flush(flushToDisk: true);
+                    }
                     catch (Exception ex)
                     {
                         Console.WriteLine($"QuoteFileStreamPool.FlushAll 錯誤: {ex.Message}");
@@ -166,7 +180,8 @@ namespace OzaLog.Core
 
             var existingSize = File.Exists(filePath) ? new FileInfo(filePath).Length : 0L;
 
-            var fs = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.Read, bufferSize: 4096, useAsync: false);
+            // v3.3.0:與主 logger 一致改用 FileShare.ReadWrite,讓外部工具可以邊跑邊看(理由見 FileStreamPool.OpenSlot)
+            var fs = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 4096, useAsync: false);
             var writer = new StreamWriter(fs, Encoding.UTF8) { AutoFlush = false };
 
             var slot = new Slot

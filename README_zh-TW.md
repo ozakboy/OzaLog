@@ -140,6 +140,43 @@ LOG.Configure(o => o.EnableGlobalExceptionCapture = true);
 
 > 注意：本功能不涵蓋 WPF/WinForms UI thread 異常與 ASP.NET Core middleware 異常 — 那些需要應用程式自行 hook。
 
+## Flush 與 Shutdown（v3.3+）
+
+預設是非同步寫入，所以剛寫完的那筆還不在磁碟上。當行程接下來可能被強制終止（容器停止、整個程式的 `finally`、crash handler），或你正要讀剛才寫進去的檔案時，先要一道屏障：
+
+```csharp
+LOG.Flush();                 // 擋住，直到目前為止寫的每一筆都落到磁碟
+await LOG.FlushAsync();      // 同上，但不佔住執行緒
+```
+
+`Flush()` 在佇列排空且檔案落盤後回 `true`，逾時回 `false`（預設 10 秒，要自訂用 `LOG.Flush(timeoutMs)`）。呼叫端執行緒會一起幫忙排空，而不是乾等 dispatcher 的週期，所以這是真的屏障、不是換個寫法的 sleep：寫 1000 筆、呼叫 `Flush()`，它回來的當下檔案就是 1000 行。
+
+行程收尾時把 logger 關掉：
+
+```csharp
+LOG.Shutdown();              // 排空落盤、停掉背景工作與計時器、關閉所有日誌檔
+await LOG.ShutdownAsync();   // 非同步版本
+```
+
+`Shutdown()` 之後**所有寫入一律靜默丟棄** — 不擲例外，也不印 Console。背景服務型的套件不能在自己收尾之後把宿主弄掛，而已經在收尾的宿主也不該為了每一行 log 加防呆。目前狀態可用 `LOG.IsShutdown` 查詢。
+
+`Shutdown()` 冪等：第一次回 `true`，之後回 `false`（那不是錯誤）；與內建的 `ProcessExit` 收尾不論誰先誰後都安全。
+
+要在同一個行程裡重新開始寫，呼叫 `Configure` — `Shutdown` 之後才允許，也只有那個時候允許；管線還活著時 `Configure` 維持不可重入。重啟時配置回到預設值，避免上一輪的設定殘留成看不見的隱藏狀態：
+
+```csharp
+LOG.Shutdown();
+LOG.Configure(o => o.LogPath = "logs2");   // 管線重啟，IsShutdown 回到 false
+```
+
+以上方法在任何路徑都不擲例外。`FlushAsync` / `ShutdownAsync` 在每個 TFM（含 `netstandard2.0`）都回傳 `Task<bool>`；取消時回 `false`，不擲 `OperationCanceledException`。
+
+## 已知限制
+
+- **同一毫秒內寫入的多筆，不保證依序落檔。** 時間戳快取的解析度是 1 ms，佇列又是分批排空的，同一毫秒的兩筆在檔案裡可能任一順序。事後需要排序請開 `HighPrecisionTimestamp = true`。
+- **同步模式（`EnableAsyncLogging = false`）沒有過期清理。** `KeepDays` 由背景清理器負責，而它只在非同步管線啟動；請自行清理舊的日期目錄，或改用非同步模式。
+- **日誌檔以 `FileShare.ReadWrite` 開啟附加**（v3.3.0 起），外部行程可以邊跑邊讀、也可以用讀寫模式開啟。多個寫入端同時附加同一個檔案時，OzaLog 不負責協調。
+
 ## Benchmarks
 
 對 ZLogger 2.5.10、ZeroLog 2.6.1、Serilog 4.2.0 + Sinks.File 6.0.0 比較。.NET 10.0.7、AMD Ryzen 9 9950X3D、BenchmarkDotNet 0.14：

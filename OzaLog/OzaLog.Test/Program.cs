@@ -32,7 +32,7 @@ var mainFormat = args.Length >= 1 ? ParseLogFormat(args[0]) : LogOutputFormat.Tx
 var quoteFormat = args.Length >= 2 ? ParseQuoteFormat(args[1]) : QuoteOutputFormat.Json;
 var asyncLogging = args.Length < 3 || ParseWriteMode(args[2]);
 
-Header("OzaLog v3.2.0 console smoke test");
+Header("OzaLog v3.3.0 console smoke test");
 Console.WriteLine($"  PID:           {Environment.ProcessId}");
 Console.WriteLine($"  BaseDir:       {AppContext.BaseDirectory}");
 Console.WriteLine($"  Runtime:       {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}");
@@ -476,8 +476,14 @@ Console.WriteLine($"  累計 drop 數: {qDropAfter:N0}");
 Console.WriteLine("  ✓ 預期:超出 queue 部分被 drop oldest,callback 應該收到通知");
 
 // ─── 等 dispatcher 處理完 ────────────────────────────────────────────────
-Header("等待 dispatcher flush 最後 batch");
-Thread.Sleep(2500);
+// v3.3.0:改用 LOG.Flush() 取代「睡 2.5 秒賭它寫完了」。
+// Flush 回來就代表兩條 pipeline 的佇列都排空且檔案已落盤,下面的統計才是確定的。
+Header("LOG.Flush() — 等兩條 pipeline 排空並落盤");
+var flushSw = Stopwatch.StartNew();
+var flushed = LOG.Flush();
+flushSw.Stop();
+Console.WriteLine($"  回傳值:   {flushed}(false 代表逾時或已 Shutdown)");
+Console.WriteLine($"  耗時:     {flushSw.ElapsedMilliseconds:N0} ms");
 
 // ─── 終端報告 ────────────────────────────────────────────────────────────
 Header("最終統計");

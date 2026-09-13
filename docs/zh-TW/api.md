@@ -77,6 +77,8 @@ public static void Configure(Action<LogConfiguration.LogOptions> configure);
 
 **不可重入**。第二次呼叫拋 `InvalidOperationException("OzaLog 已初始化（Configure 不可重入）")`。若從未呼叫 `Configure`,首次寫 log 會自動以預設值初始化。
 
+> v3.3.0 起有一個例外:`LOG.Shutdown()`(§1.5) 之後管線已經不在跑,`Configure` 因此再次被允許,並會重啟管線 — 配置**回到預設值**,不是上一輪的設定。
+
 ### 1.4 `LOG.GetCurrentOptions()` — 唯讀配置視圖
 
 ```csharp
@@ -84,6 +86,45 @@ public static LogConfiguration.ILogOptions GetCurrentOptions();
 ```
 
 回傳一個包裝目前 `LogOptions` 的唯讀介面。用於診斷與驗證執行中設定。
+
+### 1.5 生命週期 — `Flush` / `Shutdown` (v3.3+)
+
+```csharp
+public static bool IsShutdown { get; }
+
+public static bool Flush();
+public static bool Flush(int timeoutMs);
+public static Task<bool> FlushAsync(CancellationToken cancellationToken = default);
+public static Task<bool> FlushAsync(int timeoutMs, CancellationToken cancellationToken = default);
+
+public static bool Shutdown();
+public static bool Shutdown(int timeoutMs);
+public static Task<bool> ShutdownAsync(CancellationToken cancellationToken = default);
+public static Task<bool> ShutdownAsync(int timeoutMs, CancellationToken cancellationToken = default);
+```
+
+| 成員 | 回傳 | 意義 |
+| --- | --- | --- |
+| `Flush` / `FlushAsync` | `true` | 兩條 pipeline 都已排空,檔案已落盤(`fsync`) |
+| | `false` | 逾時(預設 10 秒)、被取消,或已收尾 — 已寫入的部分仍會盡力 flush |
+| `Shutdown` / `ShutdownAsync` | `true` | 本次呼叫真的執行了收尾 |
+| | `false` | 先前已收尾 — 冪等,不是錯誤 |
+| `IsShutdown` | `bool` | 目前是否處於「寫入會被丟棄」的狀態 |
+
+**`Flush` 是精確的屏障**。呼叫端執行緒會一起幫忙排空,而不是乾等 dispatcher 的 `FlushIntervalMs` 週期,所以呼叫前寫的 1000 筆,在它回來的當下就是檔案裡的 1000 行。主 logger 與報價 pipeline 都涵蓋。
+
+**`Shutdown` 會停掉背景工作**:先排空落盤,再停掉 dispatcher、定期 flush 計時器與過期清理計時器,並關閉所有日誌檔。之後**所有寫入一律靜默丟棄**(不擲例外、不印 Console),而 `Configure` 變成可以再次呼叫 — 那會以**預設值**重啟管線(見 §1.3)。與內建的 `ProcessExit` / `UnhandledException` 收尾不論誰先誰後都安全。
+
+**以上方法在任何路徑都不擲例外**,包含被取消的 `CancellationToken`(回 `false`,不擲 `OperationCanceledException`)。回傳 `Task` 的多載在每個 TFM 都有,含 `netstandard2.0`。
+
+```csharp
+LOG.Info_Log("about to snapshot");
+LOG.Flush();                         // 上面那行此刻已在磁碟上
+
+// 行程收尾
+await LOG.ShutdownAsync();
+LOG.Info_Log("被忽略,不會擲例外");
+```
 
 ---
 
@@ -341,3 +382,4 @@ v3.1.0 以前所有大括號都會被加倍(`{{ "Type": ... "Data": {{}} }}`),�
 - v3.1 新增內容**全部是 additive** — 沒移除或重命名任何公開 API。
 - `LogOptions` 與新 `QuoteOptions` 的所有新選項都預設為 v3.0 行為 — 現有程式碼不需修改。
 - 新加的 `ILogOptions` 介面成員(`OutputFormat`、`TimeFormat`、`ShowThreadId`、`ShowThreadName`、`HighPrecisionTimestamp`、`QuoteOptions`)是**唯讀**;函式庫消費者通常只透過 `LOG.GetCurrentOptions()` 讀取,所以這對典型用法不算 breaking change。
+- v3.3 的新增(`Flush`、`FlushAsync`、`Shutdown`、`ShutdownAsync`、`IsShutdown`)同樣是**純新增** — 既有簽章沒動、預設值沒動。唯一的行為變更是 `Configure` 在 `Shutdown` 之後變成可以再呼叫;管線還活著時第二次呼叫仍然擲例外。

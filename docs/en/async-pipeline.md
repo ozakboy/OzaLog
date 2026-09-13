@@ -83,9 +83,17 @@ A `Timer` calls `FileStreamPool.FlushAll()` every `DiskFlushIntervalMs` (default
 
 ### 1.6 Shutdown safety
 
-- `AppDomain.CurrentDomain.ProcessExit` → drain + flush + close all streams
+Automatic, always registered (once per process):
+
+- `AppDomain.CurrentDomain.ProcessExit` → drain + flush
 - `AppDomain.CurrentDomain.UnhandledException` → same
 - `LOG.Configure` can subscribe `EnableGlobalExceptionCapture = true` for additional Fatal-level logging on unhandled exceptions and unobserved Task exceptions.
+
+Explicit, since v3.3.0 (see [API §1.5](api.md)):
+
+- `LOG.Flush()` / `LOG.FlushAsync(...)` — the calling thread helps drain the queue until the **pending counter** reaches zero, then forces an `fsync`. The counter is what makes the guarantee exact: an empty queue only means nothing is *waiting*, not that the dispatcher has finished writing the item it already took.
+- `LOG.Shutdown()` / `LOG.ShutdownAsync(...)` — flush, cancel the dispatcher token, stop the disk-flush and retention timers, close every stream. Idempotent, and safe in any order relative to the `ProcessExit` handler above.
+- After shutdown, `Enqueue` returns immediately: no writes, no background thread started. `LOG.Configure` restarts the pipeline with a fresh semaphore and `CancellationTokenSource`.
 
 ---
 

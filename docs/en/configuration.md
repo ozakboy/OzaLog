@@ -5,7 +5,7 @@ description: Complete reference of LogOptions, AsyncLogOptions, QuoteOptions exp
 
 # Configuration
 
-All configuration is set **once** at process start via `LOG.Configure(...)`. The call is **not re-entrant** — a second call throws `InvalidOperationException`. If you skip it entirely, defaults apply on first log write.
+All configuration is set **once** at process start via `LOG.Configure(...)`. The call is **not re-entrant** — a second call throws `InvalidOperationException`. If you skip it entirely, defaults apply on first log write. Since v3.3.0, `Configure` is allowed again after `LOG.Shutdown()`, which restarts the pipeline with the options reset to their defaults.
 
 ```csharp
 using OzaLog;

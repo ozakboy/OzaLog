@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
 
@@ -6,7 +6,7 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <PackageId>OzaLog</PackageId>
     <AssemblyName>OzaLog</AssemblyName>
-    <PackageVersion>3.2.0</PackageVersion>
+    <PackageVersion>3.3.0</PackageVersion>
     <RootNamespace>OzaLog</RootNamespace>
     <LangVersion>latest</LangVersion>
 
@@ -30,24 +30,33 @@
     <Title>OzaLog — Lean .NET local file logger</Title>
     <!-- PackageReleaseNotes 由 uplog 指令在每次發版時更新;與英文 changelog 對齊 -->
     <PackageReleaseNotes>
-v3.2.0 — Three fixes that change what actually lands in your log files. No API changes, no default value changes. Released as a minor version, not a patch, because the content of your logs changes: read the notes below before upgrading if anything downstream reads these files.
+v3.3.0 — Host-facing lifecycle control. LOG.Flush() / LOG.Shutdown() and their async counterparts, plus log files you can now actually open while the process is running. Additive only: no existing signature changed, no default value changed.
+
+ADDED:
+- LOG.Flush() / LOG.Flush(int timeoutMs) — blocks until every entry written so far has reached the disk, then returns true. The calling thread helps drain the queue instead of waiting out the dispatcher's interval, so this is a real barrier, not a sleep: after Flush() returns, a 1000-entry burst is 1000 lines in the file. Returns false on timeout (default 10 s) or after Shutdown. Never throws.
+- LOG.FlushAsync(CancellationToken) / LOG.FlushAsync(int timeoutMs, CancellationToken) — Task&lt;bool&gt;-returning versions, available on every target framework including netstandard2.0. Cancellation returns false rather than throwing OperationCanceledException.
+- LOG.Shutdown() / LOG.Shutdown(int) / LOG.ShutdownAsync(...) — flushes, then stops the dispatcher, the periodic disk-flush timer and the retention-cleanup timer, and closes every open log file. Idempotent: the first call returns true, later calls return false, and that is not an error. Safe to interleave with the ProcessExit / UnhandledException cleanup in either order.
+- After Shutdown, every logging call is silently discarded — no exception, no console noise. A background-logging library must not take the host down on its way out, and a host that is already shutting down should not have to guard every log statement.
+- LOG.Configure(...) is still non-reentrant while the pipeline is alive, but it is now allowed again after Shutdown: it restarts the pipeline and clears the discard state. The options are reset to defaults on restart, so the previous round's settings cannot linger as invisible state.
+- LOG.IsShutdown — reports whether the logger is currently shut down.
 
 FIXED:
-- Error / Fatal entries (and any call with immediateFlush: true) were written TWICE. AsyncLogHandler.Enqueue queued the item for the dispatcher and also wrote it synchronously on the caller thread, so each entry appeared as two identical lines. If you have been counting errors from your logs, your numbers were inflated — between 1x and 2x the real count, not a clean doubling, because the queued copy could still be discarded by drop-oldest backpressure when the queue was saturated. Recalibrate any error-rate alert thresholds. These entries are now written only once, on the caller thread, with the immediate-flush guarantee unchanged; as a side benefit they no longer pass through the queue and can never be dropped. Trace / Debug / Info / Warn / CustomName were not affected.
-- Synchronous mode (EnableAsyncLogging = false) produced 0-byte log files. The synchronous path wrote into a StreamWriter with AutoFlush = false and nothing ever flushed it — the dispatcher, the periodic disk-flush timer and the ProcessExit hook are all started by the async pipeline, which synchronous mode never reaches, so the content was lost when the process exited. If you have been using synchronous mode, your log files have been empty all along. Synchronous mode now flushes after every entry (no forced fsync), stays thread-safe, and produces formatting identical to asynchronous mode.
-- Curly braces in a message were doubled in the file output: serialized exceptions landed as {{ "Type": ... }} instead of { "Type": ... }, so the JSON could not be parsed. LOG.Log escaped every { and } up front for AppendFormat, but the no-arguments path appends the message directly and never unescapes it. BREAKING FOR LOG PARSERS: exception and object payloads are now emitted as valid, directly parsable JSON. If you built parsing or regex around the doubled braces, adjust it. Messages that mix literal braces with {0} placeholders now also format correctly — previously the whole message was emitted raw with the placeholder unsubstituted.
+- Log files were opened with FileShare.Read, which only admits readers that open read-only. tail, editors and most log viewers open with FileAccess.ReadWrite and were rejected with a sharing violation — in practice, you could not watch the log while the process was running. Files are now opened with FileShare.ReadWrite. The writer keeps exclusive append semantics; this only widens what other processes may do with the file.
 
 TECHNICAL:
-- Brace escaping moved from the caller thread into the formatter, and now happens only on the AppendFormat path. Valid format items ({0}, {1,-8}, {2:F4}) are preserved; everything else is escaped, including out-of-range indexes that used to throw FormatException. Applies to both text and JSON output formats.
-- Removed the Microsoft.SourceLink.GitHub package reference. SourceLink has shipped in the SDK since .NET 8; PublishRepositoryUrl + EmbedUntrackedSources produce an identical nuspec repository element and identical source-link mappings in the PDBs on all five target frameworks, netstandard2.0 and 2.1 included. This clears the NU1902 vulnerability advisory on its transitive Microsoft.Build.Tasks.Git dependency. Build-only change; consumers are unaffected.
-- Added XML documentation for the 16 remaining public members of LogConfiguration. The library now builds with 0 warnings on all five target frameworks.
-- New regression tests (BraceEscapingTests) covering literal braces with and without format arguments, both output formats, and exception payloads verified by actually parsing them with System.Text.Json. DuplicateWriteTests, SyncModeWriteTests and AutoFlushLevelTests still pass; 73 tests green.
+- Removed the DocumentationFile property from the project file. It pinned every target framework to a single file.xml in the project directory (five frameworks racing to write the same file) and shipped the docs as lib/&lt;tfm&gt;/file.xml, which IntelliSense ignores — it only looks for &lt;AssemblyName&gt;.xml. The bilingual XML documentation was therefore invisible to consumers all along. The package now carries lib/&lt;tfm&gt;/OzaLog.xml and IntelliSense picks it up.
+- Both pipelines track outstanding entries with a pending counter rather than inferring completion from queue emptiness. An empty queue does not mean the work is done: the dispatcher may have dequeued an item that has not reached the file yet, and a Flush that trusted the queue would return one entry early.
+- The dispatcher's semaphore and cancellation token are rebuilt on each Initialize so the pipeline can restart after Shutdown; the ProcessExit / UnhandledException handlers are registered only once, so a restart does not run the same cleanup several times over.
+- FileStreamPool.FlushAll and QuoteFileStreamPool.FlushAll gained a flushToDisk overload. The periodic timer still passes false (hand the buffer to the OS, performance first); Flush and Shutdown pass true and force an fsync, because the reason a host calls them is that the process may be killed next.
+- New tests: LifecycleTests (Flush lands exactly 1000 of 1000 entries, writes after Shutdown throw nothing and leave no trace, Shutdown is idempotent alongside the ProcessExit cleanup, Configure stays non-reentrant until Shutdown, logging resumes after a restart) and FileShareTests (the file is readable, read-write openable, and still writable while the writer holds it). Cross-class test parallelism is disabled, since shutting the pipeline down is process-global state. 81 tests green.
 
-KNOWN LIMITATION:
-- Synchronous mode still has no retention cleanup (KeepDays does not take effect without the async pipeline). Clean old date directories yourself, or use asynchronous mode.
+KNOWN LIMITATIONS:
+- Entries written within the same millisecond are not guaranteed to land in file order. The timestamp cache has 1 ms resolution and the queue is drained in batches; use HighPrecisionTimestamp if you need to order entries after the fact.
+- Synchronous mode (EnableAsyncLogging = false) still has no retention cleanup: KeepDays does not take effect without the async pipeline. Clean old date directories yourself, or use asynchronous mode.
 
 Full changelog: https://github.com/ozakboy/OzaLog/blob/main/docs/en/changelog.md
 Async pipeline details: https://github.com/ozakboy/OzaLog/blob/main/docs/en/async-pipeline.md
+API reference: https://github.com/ozakboy/OzaLog/blob/main/docs/en/api.md
 Website: https://ozakboy.github.io/OzaLog/
 
     </PackageReleaseNotes>
@@ -62,9 +71,15 @@ Website: https://ozakboy.github.io/OzaLog/
     <RepositoryUrl>https://github.com/ozakboy/OzaLog</RepositoryUrl>
     <RepositoryType>github</RepositoryType>
 
-    <!-- 文件產生設定 -->
+    <!--
+      文件產生設定
+      v3.3.0：移除 <DocumentationFile>file.xml</DocumentationFile>。
+      釘死路徑在多 TFM 下是瑕疵：五個 TFM 同時往專案目錄下同一個 file.xml 寫（誰最後寫完誰贏），
+      而且打包出來的檔名是 lib/<tfm>/file.xml —— IntelliSense 只認 <AssemblyName>.xml，
+      整套中英雙語註解在消費者端等於看不到。只留 GenerateDocumentationFile 後，
+      每個 TFM 各自產生 obj/<tfm>/OzaLog.xml 並打包成 lib/<tfm>/OzaLog.xml，註解才真的送得到使用者。
+    -->
     <GenerateDocumentationFile>True</GenerateDocumentationFile>
-    <DocumentationFile>file.xml</DocumentationFile>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
     <!-- 套件圖示 (顯示於 NuGet.org 與 IDE 套件管理員) -->

@@ -5,7 +5,7 @@ description: OzaLog v3.1 完整配置參考 — LogOptions、AsyncLogOptions、Q
 
 # 配置選項
 
-所有配置都在程式啟動時透過 `LOG.Configure(...)` **一次性**設定。此呼叫**不可重入** — 第二次呼叫拋 `InvalidOperationException`。若完全省略,首次寫 log 會自動以預設值初始化。
+所有配置都在程式啟動時透過 `LOG.Configure(...)` **一次性**設定。此呼叫**不可重入** — 第二次呼叫拋 `InvalidOperationException`。若完全省略,首次寫 log 會自動以預設值初始化。v3.3.0 起,`LOG.Shutdown()` 之後允許再次 `Configure`,那會以預設值重啟管線。
 
 ```csharp
 using OzaLog;

@@ -83,9 +83,17 @@ OzaLog 內含兩條**獨立**的非同步管線:
 
 ### 1.6 收尾保證
 
-- `AppDomain.CurrentDomain.ProcessExit` → drain + flush + 關閉所有 stream
+自動,一律註冊(每個行程只掛一次):
+
+- `AppDomain.CurrentDomain.ProcessExit` → drain + flush
 - `AppDomain.CurrentDomain.UnhandledException` → 同上
 - `LOG.Configure` 可訂閱 `EnableGlobalExceptionCapture = true`,在 unhandled exception 與 unobserved Task exception 時額外做 Fatal 級別寫入。
+
+明確呼叫,v3.3.0 起(見 [API §1.5](api.md)):
+
+- `LOG.Flush()` / `LOG.FlushAsync(...)` — 呼叫端執行緒一起幫忙排空,直到**未完成筆數**歸零才強制 `fsync`。保證之所以精確,關鍵就在這個計數器:佇列空了只代表沒有東西在*等*,不代表 dispatcher 已經把剛取走的那筆寫完。
+- `LOG.Shutdown()` / `LOG.ShutdownAsync(...)` — 排空落盤、取消 dispatcher 的 token、停掉 flush 與過期清理計時器、關閉所有 stream。冪等,且與上面的 `ProcessExit` 收尾不論誰先誰後都安全。
+- 收尾之後 `Enqueue` 直接返回:不寫入,也不會啟動背景執行緒。`LOG.Configure` 會以全新的 semaphore 與 `CancellationTokenSource` 重啟管線。
 
 ---
 

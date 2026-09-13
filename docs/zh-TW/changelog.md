@@ -10,6 +10,52 @@ description: OzaLog 所有重要變更紀錄。
 
 ---
 
+## [3.3.0] - 2026-09-14
+
+> 宿主端的生命週期控制:`LOG.Flush()` / `LOG.Shutdown()` 與各自的非同步版本,外加「跑著的時候日誌檔真的打得開」。本版全部是**新增** — 既有簽章沒動、預設值沒動 — 從 3.2.0 升上來不需要改任何程式碼。
+>
+> 為什麼這件事重要:寫入是非同步的,在此之前想知道「我寫的那筆到底落地了沒」,除了睡一下再賭一把之外沒有別的辦法。接下來可能被強制終止的宿主(容器停止、crash handler、整個程式的 `finally`)沒有屏障可等,而想把 logger 關掉的人也沒有辦法停掉背景工作。
+
+### 新增功能
+
+**`LOG.Flush()` — 真的屏障,不是換個寫法的 sleep**
+- `LOG.Flush()` / `LOG.Flush(int timeoutMs)` 擋住呼叫端,直到目前為止寫的每一筆都落到磁碟才回 `true`;逾時(預設 10 秒)或已收尾時回 `false`。
+- 呼叫端執行緒會**一起幫忙排空佇列**,而不是乾等 dispatcher 的 `FlushIntervalMs` 週期,所以保證是精確的:寫 1000 筆、呼叫 `Flush()`,它回來的當下檔案就是 1000 行 — 不必補 sleep、不必重讀、不必寫重試迴圈。
+- `LOG.FlushAsync(CancellationToken)` / `LOG.FlushAsync(int timeoutMs, CancellationToken)` 在**每個** TFM(含 `netstandard2.0`)都回傳 `Task<bool>`;取消時回 `false`,不擲 `OperationCanceledException`。
+- 兩條 pipeline(主 logger 與報價)都會被排空,且都強制 `fsync` — 宿主會呼叫 `Flush` 的理由就是「接下來可能被砍」,只把緩衝交給 OS 是不夠的。
+
+**`LOG.Shutdown()` — 停掉背景工作**
+- `LOG.Shutdown()` / `LOG.Shutdown(int timeoutMs)` / `LOG.ShutdownAsync(...)`:先排空落盤,再停掉 dispatcher、定期 flush 計時器與過期清理計時器,最後關閉所有日誌檔。
+- **冪等**。第一次回 `true`,之後回 `false` — 那是回報,不是錯誤。與內建的 `ProcessExit` / `UnhandledException` 收尾不論誰先誰後都安全,所以明確呼叫 `Shutdown()` 之後又正常結束行程,不會把收尾跑兩遍,也不會撞上關到一半的 stream。
+- **收尾之後的寫入一律靜默丟棄** — 不擲例外,連 Console 都不印。背景服務型的套件不能在自己收尾之後把宿主弄掛,而已經在收尾的宿主也不該為了每一行 log 加防呆。目前狀態可用 `LOG.IsShutdown` 查詢。
+
+**`Shutdown` 之後允許再次 `Configure`**
+- 管線還活著時 `LOG.Configure(...)` 維持不可重入(v3.0 起的行為不變 — 它存在的理由是不讓人在執行中途換設定),但**收尾之後現在允許再呼叫**:會重啟管線並解除丟棄狀態。那條限制本來就只在「還有東西在跑」的前提下才有意義。
+- 重啟時配置**回到預設值**,避免上一輪的設定殘留成沒人設定過、也沒人看得見的隱藏狀態。
+
+### 問題修正
+
+**執行中的日誌檔,外部工具打不開**
+- 檔案以 `FileShare.Read` 開啟,而那個模式只允許**以唯讀方式**開檔的讀取者。`tail`、編輯器與多數日誌檢視工具都是以 `FileAccess.ReadWrite` 開檔,一律吃到共用違規 — 實務上就是*跑著的時候看不到日誌*,而那幾乎是本地檔案 logger 的存在意義。
+- 現在改以 `FileShare.ReadWrite` 開啟(主 logger 與報價 pipeline 都是)。寫入端仍維持自己的附加用 handle;這一改只是放寬其他行程能對該檔做什麼。
+
+### 技術改進
+
+- **移除專案檔的 `DocumentationFile` 屬性**。它把五個 TFM 釘死在專案目錄下的同一個 `file.xml`(五個建置搶著寫同一個檔),而且打包出來的檔名是 `lib/<tfm>/file.xml` — IntelliSense 不認這個名字,它只找 `<AssemblyName>.xml`。**也就是說,整套中英雙語 XML 註解在消費者端一直是看不到的。** 只留 `GenerateDocumentationFile` 之後,每個 TFM 各自產生 `OzaLog.xml`,套件現在帶的是 `lib/<tfm>/OzaLog.xml`,IntelliSense 讀得到。repo 裡那份過時的 `file.xml` 一併移除。
+- 兩條 pipeline 改用**未完成筆數(pending counter)**追蹤,不再用「佇列空了」推論「寫完了」。佇列空不等於工作做完 — dispatcher 可能剛把一筆取出來、還沒寫進檔案 — 只看佇列的 `Flush` 會提早一筆回來。計數器在入隊**之前**遞增,理由相同。
+- dispatcher 的 semaphore 與 `CancellationTokenSource` 改為每次 `Initialize` 重建,收尾之後才能真的重啟;`ProcessExit` / `UnhandledException` 的 handler **每個行程只掛一次**,重啟不會疊出好幾份重複的收尾。
+- `FileStreamPool.FlushAll` 與 `QuoteFileStreamPool.FlushAll` 新增 `flushToDisk` 多載(無參數版本行為不變)。定期計時器仍傳 `false` — 把緩衝交給 OS、吞吐優先;`Flush` / `Shutdown` 傳 `true`,強制 `fsync`。
+- 新增內部協調器 `LogLifecycle` — 收尾旗標與兩條 pipeline 的先後順序集中在這一處,`LOG` 本身維持薄的門面。
+- 新增 xUnit 測試:`LifecycleTests`(連寫 1000 筆後 `Flush` 回來時檔案剛好 1000 行;`Shutdown` 之後的寫入不擲例外且不留痕跡;`Shutdown` 冪等,且之後才觸發的 `ProcessExit` 收尾不互相干擾;`Configure` 在收尾前仍不可重入;重啟後恢復寫入)與 `FileShareTests`(寫入端持有檔案時,外部可唯讀開啟、也可讀寫開啟,且之後寫入端仍能繼續寫)。組件層級關閉跨類別平行測試 — 收尾是行程級的全域狀態,不關的話會把其他測試類別寫到一半掐斷。**81 個測試全綠**(3.2.0 為 73 個)。
+- `net8.0` / `net9.0` / `net10.0` 的零 NuGet 相依維持不變;五個 TFM 的建置驗證:0 錯誤、0 警告。
+
+### 已知限制
+
+- **同一毫秒內寫入的多筆,不保證依序落檔。** 時間戳快取的解析度是 1 ms,佇列又是分批排空的;事後需要排序請開 `HighPrecisionTimestamp = true`。這一項不打算改:1 ms 快取正是呼叫端成本壓在幾奈秒的原因。
+- **同步模式(`EnableAsyncLogging = false`)仍然沒有過期清理** — `KeepDays` 由背景清理器負責,而它只在非同步管線啟動。此限制自 3.2.0 延續。
+
+---
+
 ## [3.2.0] - 2026-09-11
 
 > 三個修正,改的都是**實際落到日誌檔裡的內容**:`Error` / `Fatal` 每筆重複寫入、同步模式(`EnableAsyncLogging = false`)完全寫不出內容、訊息裡的大括號被加倍導致異常 JSON 無法解析。公開 API 簽章與預設配置值完全沒動,所以不是 Major;但因為日誌內容會變,發為 Minor 而非 Patch — Patch 常被自動升級工具直接套用,Minor 才會讓人在升級時多看一眼這份說明。

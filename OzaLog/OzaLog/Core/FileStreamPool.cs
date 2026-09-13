@@ -83,7 +83,7 @@ namespace OzaLog.Core
         /// <param name="name">日誌名稱（CustomName 用）/ Log name</param>
         /// <param name="flushToDisk">
         /// 是否強制寫入實體磁碟（fsync，預設 true）；false 時只把緩衝交給 OS，
-        /// 與 <see cref="FlushAll"/> 的定期 flush 行為一致（效能優先）。
+        /// 與 <see cref="FlushAll()"/> 的定期 flush 行為一致（效能優先）。
         /// Whether to force an fsync (default true); false only hands the buffer to the OS.
         /// </param>
         public static void Flush(LogLevel level, string name, bool flushToDisk = true)
@@ -110,9 +110,25 @@ namespace OzaLog.Core
         }
 
         /// <summary>
-        /// flush 全部開啟的 stream（由 100ms 定期 timer 呼叫）
+        /// flush 全部開啟的 stream（由 100ms 定期 timer 呼叫）。
+        /// 不強制 fsync，讓 OS 決定何時落盤，效能優先。
         /// </summary>
         public static void FlushAll()
+        {
+            FlushAll(flushToDisk: false);
+        }
+
+        /// <summary>
+        /// flush 全部開啟的 stream。
+        /// Flushes every open stream.
+        /// </summary>
+        /// <param name="flushToDisk">
+        /// 是否強制寫入實體磁碟（fsync）。定期 timer 傳 <c>false</c>；
+        /// v3.3.0 的 <c>LOG.Flush()</c> / <c>LOG.Shutdown()</c> 傳 <c>true</c>，
+        /// 因為宿主呼叫它的理由就是「接下來可能被強制終止，現在就要確定落地」。
+        /// Whether to force an fsync; the periodic timer passes false, LOG.Flush/Shutdown pass true.
+        /// </param>
+        public static void FlushAll(bool flushToDisk)
         {
             lock (_gate)
             {
@@ -121,7 +137,8 @@ namespace OzaLog.Core
                     try
                     {
                         node.Value.Writer?.Flush();
-                        // 不 flushToDisk(true)，讓 OS 決定何時 fsync，效能優先
+                        if (flushToDisk)
+                            node.Value.Stream?.Flush(flushToDisk: true);
                     }
                     catch (Exception ex)
                     {
@@ -177,7 +194,11 @@ namespace OzaLog.Core
 
             var existingSize = File.Exists(filePath) ? new FileInfo(filePath).Length : 0L;
 
-            var fs = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.Read, bufferSize: 4096, useAsync: false);
+            // v3.3.0：共用模式由 FileShare.Read 放寬為 FileShare.ReadWrite。
+            // FileShare.Read 只允許「以唯讀方式、且自身 share 含 Write」的開啟者；
+            // tail / 編輯器 / 監看工具常以 FileAccess.ReadWrite 開檔，在舊設定下一律吃到共用違規，
+            // 對「邊跑邊看日誌」是實際的可用性阻礙。放寬後外部工具怎麼開都讀得到。
+            var fs = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 4096, useAsync: false);
             var writer = new StreamWriter(fs, Encoding.UTF8) { AutoFlush = false };
 
             var slot = new Slot

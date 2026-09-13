@@ -140,6 +140,43 @@ Subscribes to `AppDomain.UnhandledException` and `TaskScheduler.UnobservedTaskEx
 
 > Note: This does not cover WPF/WinForms UI thread exceptions or ASP.NET Core middleware exceptions — those need to be hooked separately by the application.
 
+## Flush & Shutdown (v3.3+)
+
+Logging is asynchronous by default, so an entry you just wrote is not on disk yet. Whenever the process is about to be killed — a container stop, a `finally` around the whole app, a crash handler — or you are about to read the file you just wrote to, ask for a barrier:
+
+```csharp
+LOG.Flush();                 // blocks until everything written so far is on disk
+await LOG.FlushAsync();      // same, without blocking the thread
+```
+
+`Flush()` returns `true` once the queue has drained and the files have been flushed to disk, `false` on timeout (10 s by default — pass your own with `LOG.Flush(timeoutMs)`). The calling thread helps drain the queue rather than waiting out the dispatcher's interval, so this is a real barrier and not a sleep: write 1000 entries, call `Flush()`, and the file has 1000 lines by the time it returns.
+
+At the end of the process, shut the logger down:
+
+```csharp
+LOG.Shutdown();              // flush, stop the background worker and timers, close every file
+await LOG.ShutdownAsync();   // async counterpart
+```
+
+After `Shutdown()`, **every logging call is silently discarded** — no exception, no console output. A logger must not take its host down on the way out, and a host that is already shutting down should not have to guard every log statement. `LOG.IsShutdown` reports the current state.
+
+`Shutdown()` is idempotent: the first call returns `true`, later calls return `false` (which is not an error), and it interleaves safely with the built-in `ProcessExit` cleanup in either order.
+
+To log again in the same process, call `Configure` — allowed after `Shutdown`, and only then; while the pipeline is alive `Configure` stays non-reentrant. The options reset to their defaults on restart, so the previous round's settings cannot linger as invisible state:
+
+```csharp
+LOG.Shutdown();
+LOG.Configure(o => o.LogPath = "logs2");   // pipeline restarts, IsShutdown is false again
+```
+
+None of these methods throw, on any path. `FlushAsync` / `ShutdownAsync` return `Task<bool>` on every target framework, `netstandard2.0` included, and a cancelled token returns `false` instead of throwing `OperationCanceledException`.
+
+## Known Limitations
+
+- **Entries written within the same millisecond are not guaranteed to land in file order.** The timestamp cache has 1 ms resolution and the queue is drained in batches, so two entries sharing a millisecond may appear in either order. Set `HighPrecisionTimestamp = true` if you need to reorder entries after the fact.
+- **Synchronous mode (`EnableAsyncLogging = false`) has no retention cleanup.** `KeepDays` is enforced by a background cleaner that only the async pipeline starts. Clean old date directories yourself, or use asynchronous mode.
+- **Log files are opened for append with `FileShare.ReadWrite`** (since v3.3.0), so other processes can read — and open read-write — a file while it is being written. Other writers appending to the same file at the same time are not coordinated by OzaLog.
+
 ## Benchmarks
 
 Measured against ZLogger 2.5.10, ZeroLog 2.6.1, Serilog 4.2.0 + Sinks.File 6.0.0 on .NET 10.0.7 (AMD Ryzen 9 9950X3D, BenchmarkDotNet 0.14):

@@ -41,6 +41,16 @@ namespace OzaLog.Tests
         }
 
         /// <summary>
+        /// 找出某個 name 對應的日誌檔（{name}_Log.*），找不到回傳 null
+        /// </summary>
+        public static string FindLogFile(string name)
+        {
+            if (!Directory.Exists(LogRoot)) return null;
+            var files = Directory.GetFiles(LogRoot, name + "_Log.*", SearchOption.AllDirectories);
+            return files.Length > 0 ? files[0] : null;
+        }
+
+        /// <summary>
         /// 以共用模式讀取檔案；讀不到時回傳 null（不讓 I/O 例外中斷測試掃描）
         /// </summary>
         public static string ReadAllTextShared(string path)
